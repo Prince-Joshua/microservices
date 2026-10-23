@@ -2,14 +2,14 @@
 # One database per service, none shared.
 services:
   users-mongo:
-    image: mongo:7
+    image: mongo:8
     ports:
       - "27017:27017"
     volumes:
       - users-mongo-data:/data/db
 
   products-mongo:
-    image: mongo:7
+    image: mongo:8
     ports:
       - "27018:27017"
     volumes:
@@ -42,3 +42,5 @@ volumes:
   products-mongo-data:
   orders-postgres-data:
   payments-postgres-data:
+
+  

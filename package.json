@@ -3,8 +3,8 @@
   "private": true,
   "packageManager": "pnpm@10.28.0",
   "scripts": {
-    "install:all": "for s in users products orders payments; do pnpm -C $s-service install || exit 1; done",
-    "typecheck": "for s in users products orders payments; do pnpm -C $s-service run typecheck || exit 1; done",
-    "test": "for s in users products orders payments; do pnpm -C $s-service test || exit 1; done"
+    "install:all": "pnpm -C users-service install && pnpm -C products-service install && pnpm -C orders-service install && pnpm -C payments-service install",
+    "typecheck": "pnpm -C users-service typecheck && pnpm -C products-service typecheck && pnpm -C orders-service typecheck && pnpm -C payments-service typecheck",
+    "test": "pnpm -C users-service test && pnpm -C products-service test && pnpm -C orders-service test && pnpm -C payments-service test"
   }
 }
