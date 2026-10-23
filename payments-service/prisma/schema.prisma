@@ -1,0 +1,66 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("POSTGRES_URL")
+}
+
+// One row per payment ATTEMPT. An order can have several attempts (the
+// first checkout was abandoned, say), but at most one is ever accepted.
+model Payment {
+  id        String @id @default(uuid()) @db.Uuid
+  orderId   String
+  attempt   Int
+  userId    String
+  email     String
+  // Minor units (kobo for NGN). BigInt so large totals can't overflow.
+  amount    BigInt
+  currency  String
+  // Sent to Paystack as the transaction reference. Unique, and written to
+  // this table BEFORE Paystack is called, so a crash can't lose track of it.
+  reference String @unique
+
+  status           PaymentStatus @default(PENDING)
+  authorizationUrl String?
+  accessCode       String?
+  paystackId       BigInt?
+  paidAt           DateTime?     @db.Timestamptz(6)
+
+  // Handing a successful payment to the Orders service.
+  //   notifiedAt IS NULL on a SUCCESS payment = Orders hasn't answered yet;
+  //   the worker keeps retrying.
+  notifiedAt    DateTime? @db.Timestamptz(6)
+  orderAccepted Boolean?
+  rejectReason  String?
+
+  // Money that has to go back to the customer.
+  refundState    RefundState @default(NONE)
+  refundReason   String?
+  refundAttempts Int         @default(0)
+  refundedAt     DateTime?   @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+
+  @@unique([orderId, attempt])
+  @@index([orderId])
+  @@index([status, updatedAt])
+  @@index([status, notifiedAt])
+  @@index([refundState, updatedAt])
+  @@map("payments")
+}
+
+enum PaymentStatus {
+  PENDING // waiting for the customer to pay
+  SUCCESS // Paystack confirmed the money arrived (verified server-side)
+  FAILED  // declined, abandoned, or never reached Paystack
+}
+
+enum RefundState {
+  NONE
+  OWED   // money must go back; the worker retries until Paystack accepts
+  DONE   // refund accepted by Paystack
+  FAILED // gave up after repeated errors, or Paystack reported failure: handle manually
+}

@@ -1,0 +1,44 @@
+# Databases only: run each service with `npm start` in its own folder.
+# One database per service, none shared.
+services:
+  users-mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - users-mongo-data:/data/db
+
+  products-mongo:
+    image: mongo:7
+    ports:
+      - "27018:27017"
+    volumes:
+      - products-mongo-data:/data/db
+
+  orders-postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: orders
+      POSTGRES_PASSWORD: orders
+      POSTGRES_DB: orders
+    ports:
+      - "5432:5432"
+    volumes:
+      - orders-postgres-data:/var/lib/postgresql/data
+
+  payments-postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: payments
+      POSTGRES_PASSWORD: payments
+      POSTGRES_DB: payments
+    ports:
+      - "5433:5432"
+    volumes:
+      - payments-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  users-mongo-data:
+  products-mongo-data:
+  orders-postgres-data:
+  payments-postgres-data:

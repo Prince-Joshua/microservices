@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("POSTGRES_URL")
+}
+
+model Order {
+  id            String      @id @default(uuid()) @db.Uuid
+  userId        String
+  // Links the order to its stock reservations in the Products service
+  // and is the idempotency handle: unique, so a retried request can
+  // never create a second order. Nullable so orders created before
+  // this column existed stay valid (Postgres allows multiple NULLs).
+  reservationId String?     @unique
+  totalAmount   Decimal     @db.Decimal(12, 2)
+  currency      String      @default("NGN")
+  status        OrderStatus @default(PENDING)
+
+  // Payment. The order is created AWAITING_PAYMENT with its stock held,
+  // and becomes CONFIRMED only when the Payments service reports a
+  // verified payment. Unpaid orders are cancelled at paymentDueAt.
+  paymentDueAt     DateTime? @db.Timestamptz(6)
+  paymentReference String?   @unique
+  paidAt           DateTime? @db.Timestamptz(6)
+  cancelReason     String?
+
+  // Saga bookkeeping. The order row is written FIRST (status PENDING,
+  // sagaState RUNNING) so the intent survives any crash; the recovery
+  // worker uses these fields to finish or undo whatever was in flight.
+  //   RUNNING       create saga in progress
+  //   COMPENSATING  stock (and any refund) still has to be handed back
+  //   DONE          nothing left to do
+  // Default DONE so orders created before sagas existed need no recovery.
+  sagaState      SagaState @default(DONE)
+  requestedItems Json?     // [{ productId, quantity }], sorted by productId
+  failureStatus  Int?      // HTTP status to replay for a FAILED order
+  failureReason  String?
+
+  items         OrderItem[]
+  cancelledAt   DateTime?   @db.Timestamptz(6)
+  createdAt     DateTime    @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime    @default(now()) @updatedAt @db.Timestamptz(6)
+
+  @@index([userId, createdAt])
+  @@index([status, sagaState, updatedAt])
+  @@index([status, paymentDueAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id          BigInt   @id @default(autoincrement())
+  orderId     String   @db.Uuid
+  productId   String
+  productName String
+  quantity    Int
+  unitPrice   Decimal  @db.Decimal(12, 2)
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+enum OrderStatus {
+  PENDING          // saga running: stock is being reserved
+  AWAITING_PAYMENT // stock held; waiting for the customer to pay
+  CONFIRMED        // paid
+  FULFILLED        // shipped/handed over; can no longer be cancelled
+  CANCELLED        // cancelled or unpaid past its deadline; stock returned, any payment refunded
+  FAILED           // saga rolled back (out of stock, product gone, timeout...)
+}
+
+enum SagaState {
+  RUNNING
+  COMPENSATING
+  DONE
+}
