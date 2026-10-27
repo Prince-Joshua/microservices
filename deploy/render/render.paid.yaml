@@ -74,12 +74,14 @@ services:
     numInstances: 1
     # Render Blueprints cannot build a URL from another service's address, so the start
     # command does it: "orders:10000" -> "http://orders:10000".
-    dockerCommand: 'sh -c "export ORDERS_SERVICE_URL=http://$ORDERS_HOSTPORT; exec node dist/server.js"'
+    dockerCommand: 'sh -c "export ORDERS_SERVICE_URL=http://$ORDERS_HOSTPORT USERS_SERVICE_URL=http://$USERS_HOSTPORT; exec node dist/server.js"'
     envVars:
       - key: PORT
         value: 10000
       - key: MONGO_URL
         sync: false           # MongoDB Atlas connection string ending in /products
+      - key: USERS_HOSTPORT
+        fromService: { type: pserv, name: users, property: hostport }
       - key: ORDERS_HOSTPORT
         fromService: { type: pserv, name: orders, property: hostport }
       - fromGroup: shopfront-jwt

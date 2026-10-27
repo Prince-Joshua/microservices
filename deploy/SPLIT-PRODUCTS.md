@@ -14,7 +14,7 @@
 
 | Part | Entry point | Serves | Secrets it gets |
 |---|---|---|---|
-| catalog | `servers/catalog.ts` | `/products` (shop + admin) | `JWT_SECRET` |
+| catalog | `servers/catalog.ts` | `/products` (shop + admin) | `JWT_SECRET`, `INTERNAL_API_TOKEN`, `USERS_SERVICE_URL` |
 | inventory | `servers/inventory.ts` | `/internal/*` (stock for orders) | `INTERNAL_API_TOKEN` |
 | reconciler | `servers/reconciler.ts` | background repair job | `INTERNAL_API_TOKEN`, `ORDERS_SERVICE_URL` |
 

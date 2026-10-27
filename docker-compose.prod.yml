@@ -62,6 +62,7 @@ services:
       PORT: 4002
       MONGO_URL: mongodb://products-mongo:27017/products
       ORDERS_SERVICE_URL: http://orders:4000
+      USERS_SERVICE_URL: http://users:4001
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4002/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
       interval: 10s

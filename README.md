@@ -47,15 +47,23 @@ by its signature.
 | GET | `/users` | admin | `?page&limit&email` |
 | GET | `/users/:id` | admin | one user |
 | PATCH | `/users/:id` | admin | `{ isActive?, role? }` (not on yourself) |
-| GET | `/internal/users/:id` | internal | `{ id, isActive, email }` for Orders |
+| GET | `/internal/users/:id` | internal | `{ id, isActive, role, email }`; the Orders and Products services treat this, not the token, as the truth |
 
 **Sessions.** A login returns a short-lived access token and a long-lived refresh token
 (`REFRESH_TOKEN_TTL_DAYS`, 30 by default; a session never lasts past `REFRESH_MAX_SESSION_DAYS`, 90).
 Refresh tokens are random, stored only as a SHA-256 hash, and **rotated on every use**. Presenting a token
 that was already used (outside a 10-second grace window for two tabs refreshing at once) revokes the whole
 session, since that means the token was copied. Signing out, changing the password (other sessions) and
-deactivating an account revoke sessions on the server. The access token itself can't be revoked, which is
-why it is short. A role change reaches the access token at the next refresh.
+deactivating an account revoke sessions on the server. The access token itself can't be revoked, so no
+service trusts it for `isActive` or `role`: Users reads the account on every request, and Orders and Products
+ask Users (answers cached for `USER_STATUS_TTL_MS`, 15 s by default). A deactivation or role change therefore
+takes effect within seconds, and the web app picks it up on the next focus, 5-minute sync or refused request.
+If Users can't be reached, those requests fail with 503 instead of being let through. Deploy Users first.
+
+**Rate limits** (per Users instance, in memory): login 20 requests / 15 min per IP, plus 8 failed attempts / 15 min
+per email (a lock that also covers unknown emails, so it reveals nothing); refresh 60 / 15 min per IP;
+register 10 / hour per IP; 8 wrong current passwords / 15 min per account. All return 429 with `Retry-After`;
+tune with `RATE_LIMIT_*`. Set `TRUST_PROXY` to the number of proxies in front (Render free + Vercel: 2).
 
 Create the first admin: set `ADMIN_EMAIL` / `ADMIN_PASSWORD` in `.env`, then
 `pnpm run create-admin`.

@@ -307,11 +307,17 @@ export class FakeProducts {
 }
 
 export class FakeUsers {
-  map = new Map<string, { id: string; isActive: boolean; email: string }>();
+  map = new Map<
+    string,
+    { id: string; isActive: boolean; role: "customer" | "admin"; email: string }
+  >();
   down = false;
 
-  add(userId: string, { isActive = true }: { isActive?: boolean } = {}): void {
-    this.map.set(userId, { id: userId, isActive, email: `${userId}@example.com` });
+  add(
+    userId: string,
+    { isActive = true, role = "customer" }: { isActive?: boolean; role?: "customer" | "admin" } = {}
+  ): void {
+    this.map.set(userId, { id: userId, isActive, role, email: `${userId}@example.com` });
   }
 
   async getUser(userId: string) {

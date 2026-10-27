@@ -44,6 +44,7 @@ async function startServer() {
     for (const name of [
       "INTERNAL_API_TOKEN",
       "ORDERS_SERVICE_URL",
+      "USERS_SERVICE_URL",
       "JWT_SECRET",
     ]) {
       if (!process.env[name]) {

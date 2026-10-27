@@ -33,6 +33,9 @@ services:
       PORT: 4011
       MONGO_URL: mongodb://products-mongo:27017/products
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      # Admin writes are checked against the Users service.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
+      USERS_SERVICE_URL: http://users:4001
     deploy:
       replicas: ${CATALOG_REPLICAS:-2}
     healthcheck:

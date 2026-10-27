@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { usersApi } from "../api/users";
-import { SESSION_REFRESHED_EVENT, UNAUTHORIZED_EVENT } from "../api/http";
+import { FORBIDDEN_EVENT, SESSION_REFRESHED_EVENT, UNAUTHORIZED_EVENT } from "../api/http";
 import type { User } from "../api/types";
 import { AUTH_KEY, loadAuth, saveAuth } from "../lib/storage";
 import { toaster } from "../components/ui/toaster";
@@ -23,6 +23,11 @@ interface AuthValue {
 }
 
 const AuthContext = createContext<AuthValue | null>(null);
+
+/** While the tab is open and visible, re-read the profile this often. */
+const SYNC_INTERVAL_MS = 5 * 60_000;
+/** Focus events and refused requests can come in bursts; sync at most this often. */
+const SYNC_MIN_GAP_MS = 30_000;
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUserState] = useState<User | null>(() => loadAuth()?.user ?? null);
@@ -62,6 +67,59 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.addEventListener(SESSION_REFRESHED_EVENT, onRefreshed);
     return () => window.removeEventListener(SESSION_REFRESHED_EVENT, onRefreshed);
   }, []);
+
+  // A role change or a rename made elsewhere shows up without waiting for the token to expire.
+  // The servers already use the current role on every request; this keeps the menus in step.
+  // A deactivated account needs no handling here: its requests fail with 401, which ends the session.
+  const userId = user?.id;
+  useEffect(() => {
+    if (!userId) return;
+    let lastSync = Date.now();
+    let stopped = false;
+    let running = false;
+
+    const sync = async (force = false) => {
+      if (running || document.visibilityState !== "visible") return;
+      if (!force && Date.now() - lastSync < SYNC_MIN_GAP_MS) return;
+      running = true;
+      lastSync = Date.now();
+
+      try {
+        const fresh = await usersApi.me();
+        const current = loadAuth()?.user;
+        if (stopped || !current) return;
+        if (
+          fresh.role !== current.role ||
+          fresh.name !== current.name ||
+          fresh.email !== current.email ||
+          fresh.isActive !== current.isActive
+        ) {
+          setUser(fresh);
+        }
+      } catch {
+        // Offline, or the server is waking up: try again on the next trigger.
+      } finally {
+        running = false;
+      }
+    };
+
+    const onVisible = () => void sync();
+    // After a 403 the role is the likely cause: look straight away (one lookup at a time).
+    const onForbidden = () => void sync(true);
+    const timer = window.setInterval(() => void sync(true), SYNC_INTERVAL_MS);
+
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    window.addEventListener(FORBIDDEN_EVENT, onForbidden);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+      window.removeEventListener(FORBIDDEN_EVENT, onForbidden);
+    };
+  }, [userId, setUser]);
 
   // Signing in or out in another tab: follow it. (This event only fires in the other tabs.)
   useEffect(() => {

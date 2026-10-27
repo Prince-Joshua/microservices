@@ -8,6 +8,17 @@ import jwt from "jsonwebtoken";
 
 process.env.JWT_SECRET = "test-secret";
 process.env.INTERNAL_API_TOKEN = "internal-secret";
+process.env.USER_STATUS_TTL_MS = "0";
+
+// The Users service, faked: who is an admin right now.
+const accounts = new Map<string, { id: string; isActive: boolean; role: "customer" | "admin" }>([
+  ["u-admin", { id: "u-admin", isActive: true, role: "admin" }],
+  ["u-customer", { id: "u-customer", isActive: true, role: "customer" }],
+]);
+
+mock.module(new URL("../clients/users.client.js", import.meta.url).href, {
+  namedExports: { getUser: async (id: string) => accounts.get(id) ?? null },
+});
 
 // Every database call throws. These tests cover only the checks that must
 // reject a request BEFORE it can reach the database: authentication,
@@ -48,7 +59,7 @@ before(async () => {
 after(() => server.close());
 
 const token = (role: string) =>
-  jwt.sign({ role }, "test-secret", { subject: "u1", algorithm: "HS256" });
+  jwt.sign({ role }, "test-secret", { subject: `u-${role}`, algorithm: "HS256" });
 
 interface CallOptions {
   as?: string;

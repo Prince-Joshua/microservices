@@ -7,6 +7,13 @@ import {
 } from "../services/password.js";
 import { publicUser } from "../services/public-user.js";
 import { signAccessToken } from "../services/access-token.js";
+import { limitByIp, tooMany } from "../middleware/rate-limit.js";
+import {
+  loginByIp,
+  loginFailures,
+  refreshByIp,
+  registerByIp,
+} from "../middleware/auth-limits.js";
 import {
   issueRefreshToken,
   revokeByToken,
@@ -27,7 +34,7 @@ export function validPassword(value: unknown): value is string {
  * POST /auth/register  { name, email, password }
  * Always creates a customer; admins come from `pnpm run create-admin`.
  */
-router.post("/register", async (req, res) => {
+router.post("/register", limitByIp(registerByIp), async (req, res) => {
   const { name, email, password } = (req.body ?? {}) as Record<string, unknown>;
 
   if (
@@ -70,11 +77,22 @@ router.post("/register", async (req, res) => {
  * `token` is a short-lived JWT; `refreshToken` is exchanged at /auth/refresh
  * for a new pair when it expires.
  */
-router.post("/login", async (req, res) => {
+router.post("/login", limitByIp(loginByIp), async (req, res) => {
   const { email, password } = (req.body ?? {}) as Record<string, unknown>;
 
   if (typeof email !== "string" || typeof password !== "string") {
     res.status(400).json({ message: "email and password are required" });
+    return;
+  }
+
+  // Counted per email, not per address, so spreading guesses over many IPs
+  // doesn't help. Checked before the password is hashed, so a locked account
+  // costs no CPU.
+  const accountKey = email.trim().toLowerCase().slice(0, 254);
+  const locked = loginFailures.check(accountKey);
+
+  if (locked.limited) {
+    tooMany(res, locked.retryAfterSec, "Too many failed sign-in attempts.");
     return;
   }
 
@@ -91,9 +109,12 @@ router.post("/login", async (req, res) => {
     // Same answer for unknown email, wrong password and deactivated
     // account, so the response doesn't reveal which accounts exist.
     if (!user || !passwordOk || !user.isActive) {
+      loginFailures.hit(accountKey);
       res.status(401).json({ message: "Invalid credentials" });
       return;
     }
+
+    loginFailures.reset(accountKey);
 
     const { token: refreshToken } = await issueRefreshToken(String(user._id));
 
@@ -115,7 +136,7 @@ router.post("/login", async (req, res) => {
  * the old one stops working. The user is re-read, so a deactivation or a new
  * role takes effect here.
  */
-router.post("/refresh", async (req, res) => {
+router.post("/refresh", limitByIp(refreshByIp), async (req, res) => {
   const { refreshToken } = (req.body ?? {}) as Record<string, unknown>;
   const rejected = { message: "Invalid or expired refresh token" };
 

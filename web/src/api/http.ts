@@ -26,6 +26,8 @@ export class ApiError extends Error {
 }
 
 export const UNAUTHORIZED_EVENT = "auth:unauthorized";
+/** Fired when the server answers 403: a role may have changed, so the app re-reads the profile. */
+export const FORBIDDEN_EVENT = "auth:forbidden";
 /** Fired after a silent refresh, with the up-to-date user as `detail`. */
 export const SESSION_REFRESHED_EVENT = "auth:refreshed";
 
@@ -155,6 +157,8 @@ async function attempt<T>(
       (data as { message?: string } | undefined)?.message ||
       `Request failed (${response.status})`;
     const retry = Number(response.headers.get("Retry-After"));
+
+    if (response.status === 403) window.dispatchEvent(new Event(FORBIDDEN_EVENT));
 
     throw new ApiError(
       response.status,

@@ -10,6 +10,8 @@ import { installMocks } from "./helpers/fakes.js";
 
 process.env.JWT_SECRET = "test-secret";
 process.env.INTERNAL_API_TOKEN = "internal-secret";
+// The tests change accounts between calls, so don't reuse Users answers.
+process.env.USER_STATUS_TTL_MS = "0";
 
 const { prisma, products, users, payments } = installMocks(mock);
 
@@ -65,7 +67,7 @@ beforeEach(() => {
   products.add(B, { name: "Gadget", price: 3, stock: 5 });
   users.add("alice");
   users.add("bob");
-  users.add("root");
+  users.add("root", { role: "admin" });
 });
 
 const token = (sub: string, role = "customer") =>
@@ -296,9 +298,14 @@ test("a rolled-back order replays its failure for the same key", async () => {
 });
 
 test("unknown or inactive customer is rejected before anything is written", async () => {
-  const response = await place([{ productId: A, quantity: 1 }], { as: "ghost" });
+  users.add("gone", { isActive: false });
 
-  assert.equal(response.status, 404);
+  for (const as of ["ghost", "gone"]) {
+    const response = await place([{ productId: A, quantity: 1 }], { as });
+
+    assert.equal(response.status, 401, as);
+  }
+
   assert.equal(prisma.rows.length, 0);
   assert.equal(products.stock(A), 10);
 });

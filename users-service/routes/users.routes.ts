@@ -7,6 +7,8 @@ import { hashPassword, verifyPassword } from "../services/password.js";
 import { publicUser, parsePagination } from "../services/public-user.js";
 import { validPassword } from "./auth.routes.js";
 import { revokeAllForUser } from "../services/refresh-tokens.js";
+import { tooMany } from "../middleware/rate-limit.js";
+import { passwordFailures } from "../middleware/auth-limits.js";
 
 const router = Router();
 
@@ -80,6 +82,13 @@ router.post("/me/password", async (req, res) => {
     return;
   }
 
+  const locked = passwordFailures.check(currentUser(req).id);
+
+  if (locked.limited) {
+    tooMany(res, locked.retryAfterSec, "Too many wrong passwords.");
+    return;
+  }
+
   try {
     const user = await User.findById(currentUser(req).id).select(
       "+passwordHash"
@@ -91,9 +100,12 @@ router.post("/me/password", async (req, res) => {
     }
 
     if (!(await verifyPassword(currentPassword, user.passwordHash))) {
+      passwordFailures.hit(String(user._id));
       res.status(401).json({ message: "Current password is incorrect" });
       return;
     }
+
+    passwordFailures.reset(String(user._id));
 
     user.passwordHash = await hashPassword(newPassword);
     await user.save();
@@ -109,8 +121,8 @@ router.post("/me/password", async (req, res) => {
 /**
  * DELETE /users/me
  * Deactivates the account (orders reference it, so it is never erased).
- * Existing tokens stop working for new orders immediately because the
- * Orders service checks isActive on every order.
+ * Existing access tokens are refused straight away: this service checks the
+ * account on every request, and the other services re-check it within seconds.
  */
 router.delete("/me", async (req, res) => {
   try {

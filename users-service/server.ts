@@ -27,6 +27,20 @@ installOutboundTracing([
 
 const app = express();
 
+/**
+ * How many proxies sit in front of this service. The rate limiter keys on
+ * req.ip, which is only the real client when this matches your setup:
+ *   0 = none (local dev), 1 = one proxy (nginx gateway),
+ *   2 = Vercel rewrite + Render's edge (free plan).
+ * Too low and everyone shares one address; too high and callers can fake theirs.
+ */
+function trustProxySetting(): number {
+  const n = Number.parseInt(process.env.TRUST_PROXY ?? "", 10);
+  return Number.isInteger(n) && n >= 0 ? n : 1;
+}
+
+app.set("trust proxy", trustProxySetting());
+
 app.use(requestContext());
 
 app.use(express.json({ limit: "100kb" }));

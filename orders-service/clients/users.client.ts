@@ -2,12 +2,13 @@ import { OrderError } from "../errors.js";
 import { request } from "./http.js";
 
 /**
- * Returns { id, isActive, email }, or null when the user doesn't exist
+ * Returns { id, isActive, role, email }, or null when the user doesn't exist
  * (or the ID isn't one the Users service recognizes).
  */
 export interface RemoteUser {
   id: string;
   isActive: boolean;
+  role?: "customer" | "admin";
   email?: string;
 }
 
