@@ -3,6 +3,7 @@ import { Link as RouterLink, Navigate, useLocation, useNavigate } from "react-ro
 import { Alert, Button, Card, Field, Input, Link, Stack, Text } from "@chakra-ui/react";
 import { useAuth } from "../context/AuthContext";
 import { errorMessage } from "../api/http";
+import { safeAppPath } from "../lib/redirect";
 
 function AuthCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -19,7 +20,7 @@ export function LoginPage() {
   const { user, login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const from = (location.state as { from?: string } | null)?.from ?? "/";
+  const from = safeAppPath((location.state as { from?: string } | null)?.from);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -79,7 +80,7 @@ export function RegisterPage() {
   const { user, register } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const from = (location.state as { from?: string } | null)?.from ?? "/";
+  const from = safeAppPath((location.state as { from?: string } | null)?.from);
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");

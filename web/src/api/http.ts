@@ -1,5 +1,5 @@
 import { config } from "../config";
-import { getToken, hasSession, isExpired, saveUser, setToken } from "../lib/storage";
+import { getToken, isExpired, isSignedIn, setSession } from "../lib/storage";
 import type { User } from "./types";
 
 export class ApiError extends Error {
@@ -52,11 +52,23 @@ let refreshInFlight: Promise<RefreshOutcome> | null = null;
  * shares one call, and tabs take turns: refresh tokens are single-use, so two
  * parallel calls would fight over the same cookie.
  */
-function refreshSession(): Promise<RefreshOutcome> {
+export function refreshSession(): Promise<RefreshOutcome> {
   refreshInFlight ??= refreshExclusively().finally(() => {
     refreshInFlight = null;
   });
   return refreshInFlight;
+}
+
+let boot: Promise<RefreshOutcome> | null = null;
+
+/**
+ * Run once when the app starts: if the browser still holds a valid refresh cookie, this brings the
+ * session back (access token and profile). Requests wait for it, so a signed-in admin never sees the
+ * anonymous version of a page. Resolves "invalid" for a visitor who isn't signed in.
+ */
+export function restoreSession(): Promise<RefreshOutcome> {
+  boot ??= refreshSession().catch((): RefreshOutcome => "unavailable");
+  return boot;
 }
 
 async function refreshExclusively(): Promise<RefreshOutcome> {
@@ -65,8 +77,6 @@ async function refreshExclusively(): Promise<RefreshOutcome> {
 }
 
 async function doRefresh(): Promise<RefreshOutcome> {
-  if (!hasSession()) return "invalid";
-
   let response: Response;
   try {
     response = await fetch(`${config.usersUrl}/auth/refresh`, {
@@ -80,8 +90,7 @@ async function doRefresh(): Promise<RefreshOutcome> {
   if (response.ok) {
     try {
       const data = (await response.json()) as { token: string; user: User };
-      setToken(data.token);
-      saveUser(data.user);
+      setSession(data.token, data.user);
       window.dispatchEvent(new CustomEvent(SESSION_REFRESHED_EVENT, { detail: data.user }));
       return "ok";
     } catch {
@@ -199,9 +208,12 @@ export async function requestRaw<T>(
 
   if (!auth) return attempt<T>(base, path, options);
 
-  // Signed in but this tab has no usable access token (just loaded, or it expired): get one first.
+  // A page that just loaded is still finding out whether the cookie holds a session.
+  if (boot) await boot;
+
+  // Signed in, but the access token has expired: get a new one first.
   const held = getToken();
-  if (hasSession() && (!held || isExpired(held))) {
+  if (isSignedIn() && (!held || isExpired(held))) {
     const outcome = await refreshSession();
     if (outcome === "unavailable") throw new ApiError(0, SESSION_UNAVAILABLE);
     if (outcome === "invalid") throw sessionEnded();
@@ -219,7 +231,7 @@ export async function requestRaw<T>(
     if (now && now !== sentToken) {
       // Another request or tab already refreshed: just repeat with the new token.
     } else {
-      if (!hasSession()) throw sessionEnded();
+      if (!isSignedIn()) throw sessionEnded();
 
       const outcome = await refreshSession();
       if (outcome === "unavailable") throw new ApiError(0, SESSION_UNAVAILABLE);

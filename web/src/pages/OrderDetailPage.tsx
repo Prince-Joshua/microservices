@@ -13,6 +13,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { formatDate, formatMoney, shortId } from "../lib/format";
 import { PENDING_ORDER_KEY } from "../lib/storage";
 import { notifyError, notifySuccess, toaster } from "../components/ui/toaster";
+import { safeCheckoutUrl } from "../lib/redirect";
 
 type Action = "pay" | "verify" | "cancel" | "fulfill";
 
@@ -48,7 +49,7 @@ export function OrderDetailPage() {
   const pay = () =>
     run("pay", async () => {
       const res = await ordersApi.pay(id);
-      const url = res.payment?.authorizationUrl;
+      const url = safeCheckoutUrl(res.payment?.authorizationUrl);
       if (url) {
         try {
           sessionStorage.setItem(PENDING_ORDER_KEY, id);

@@ -9,22 +9,33 @@ import {
   type ReactNode,
 } from "react";
 import { usersApi } from "../api/users";
-import { FORBIDDEN_EVENT, SESSION_REFRESHED_EVENT, UNAUTHORIZED_EVENT } from "../api/http";
+import {
+  FORBIDDEN_EVENT,
+  SESSION_REFRESHED_EVENT,
+  UNAUTHORIZED_EVENT,
+  refreshSession,
+  restoreSession,
+} from "../api/http";
 import type { User } from "../api/types";
 import {
   announceSessionChange,
   clearSession,
-  hasSession,
-  loadUser,
+  getUser,
+  isSignedIn,
   onSessionChange,
-  saveUser,
-  setToken,
+  setSession,
+  setSessionUser,
 } from "../lib/storage";
 import { toaster } from "../components/ui/toaster";
 
 interface AuthValue {
   user: User | null;
   isAdmin: boolean;
+  /** True until the app knows whether the browser holds a session (the first refresh). */
+  loading: boolean;
+  /** The session couldn't be checked: the server didn't answer. Not the same as signed out. */
+  unreachable: boolean;
+
   login: (email: string, password: string) => Promise<User>;
   register: (name: string, email: string, password: string) => Promise<User>;
   logout: () => void;
@@ -37,22 +48,55 @@ const AuthContext = createContext<AuthValue | null>(null);
 const SYNC_INTERVAL_MS = 5 * 60_000;
 /** Focus events and refused requests can come in bursts; sync at most this often. */
 const SYNC_MIN_GAP_MS = 30_000;
+/** A sleeping server (free hosting) can take about a minute to wake: keep asking this long before giving up. */
+const RESTORE_RETRY_MS = 3_000;
+const RESTORE_ATTEMPTS = 25;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUserState] = useState<User | null>(loadUser);
+  const [user, setUserState] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [unreachable, setUnreachable] = useState(false);
+
+  // Nothing is stored in the browser, so a reload asks the server who is signed in (the refresh cookie).
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      let outcome = await restoreSession();
+
+      for (let attempt = 1; outcome === "unavailable" && attempt < RESTORE_ATTEMPTS; attempt += 1) {
+        await sleep(RESTORE_RETRY_MS);
+        if (cancelled || isSignedIn()) break; // gone, or the person signed in meanwhile
+        outcome = await refreshSession();
+      }
+
+      if (cancelled) return;
+      if (outcome === "ok") setUserState(getUser());
+      setUnreachable(outcome === "unavailable" && !isSignedIn());
+      setLoading(false);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const logout = useCallback(() => {
     // End the session on the server too (it also clears the refresh cookie). Best effort.
-    usersApi.logout().catch(() => undefined);
+    // Other tabs hear about it only once the cookie is really gone.
+    usersApi
+      .logout()
+      .catch(() => undefined)
+      .finally(announceSessionChange);
     clearSession();
     setUserState(null);
-    announceSessionChange();
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
     const { token, user: loggedIn } = await usersApi.login(email.trim(), password);
-    setToken(token);
-    saveUser(loggedIn);
+    setSession(token, loggedIn);
     setUserState(loggedIn);
     announceSessionChange();
     return loggedIn;
@@ -67,11 +111,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const setUser = useCallback((next: User) => {
-    if (hasSession()) {
-      saveUser(next);
-      announceSessionChange();
-    }
+    setSessionUser(next);
     setUserState(next);
+    announceSessionChange();
   }, []);
 
   // A silent token refresh can bring a changed name or role.
@@ -85,6 +127,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // The servers already use the current role on every request; this keeps the menus in step.
   // A deactivated account needs no handling here: its requests fail with 401, which ends the session.
   const userId = user?.id;
+  const userRef = useRef(user);
+  userRef.current = user;
+
   useEffect(() => {
     if (!userId) return;
     let lastSync = Date.now();
@@ -99,7 +144,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       try {
         const fresh = await usersApi.me();
-        const current = loadUser();
+        const current = userRef.current;
         if (stopped || !current) return;
         if (
           fresh.role !== current.role ||
@@ -135,17 +180,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [userId, setUser]);
 
   // Signing in or out in another tab: follow it. (A tab never hears its own announcements.)
-  // Tabs share the refresh cookie but not the in-memory access token: after a switch of
-  // account the old token is dropped, and the next request gets one for the new account.
-  const shownId = useRef(user?.id);
-  shownId.current = user?.id;
-
+  // Tabs share the refresh cookie but not memory, so this tab asks the server what the cookie says now:
+  // that brings the new account's access token and profile, or finds the session gone.
   useEffect(
     () =>
       onSessionChange(() => {
-        const next = loadUser();
-        if (next?.id !== shownId.current) setToken(null);
-        setUserState(next);
+        void refreshSession().then((outcome) => {
+          if (outcome === "ok") {
+            setUserState(getUser());
+          } else if (outcome === "invalid") {
+            clearSession();
+            setUserState(null);
+          }
+        });
       }),
     []
   );
@@ -154,7 +201,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const onUnauthorized = () => {
       // Several requests can fail together; react to the first only.
-      if (!hasSession()) return;
+      if (!isSignedIn()) return;
       logout();
       toaster.create({
         type: "warning",
@@ -167,8 +214,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [logout]);
 
   const value = useMemo<AuthValue>(
-    () => ({ user, isAdmin: user?.role === "admin", login, register, logout, setUser }),
-    [user, login, register, logout, setUser]
+    () => ({ user, isAdmin: user?.role === "admin", loading, unreachable, login, register, logout, setUser }),
+    [user, loading, unreachable, login, register, logout, setUser]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
