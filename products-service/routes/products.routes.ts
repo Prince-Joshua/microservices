@@ -10,7 +10,7 @@ const router = Router();
 type ProductView = Pick<
   IProduct,
   "name" | "price" | "stockQuantity" | "isActive" | "createdAt" | "updatedAt"
-> & { _id: unknown };
+> & { _id: unknown; imageUrl?: string };
 
 function toProduct(product: ProductView) {
   return {
@@ -18,13 +18,15 @@ function toProduct(product: ProductView) {
     name: product.name,
     price: product.price,
     stockQuantity: product.stockQuantity,
+    imageUrl: product.imageUrl ?? "",
     isActive: product.isActive,
     createdAt: product.createdAt,
     updatedAt: product.updatedAt,
   };
 }
 
-const PUBLIC_FIELDS = "name price stockQuantity isActive createdAt updatedAt";
+const PUBLIC_FIELDS =
+  "name price stockQuantity imageUrl isActive createdAt updatedAt";
 
 function validName(value: unknown): value is string {
   return (
@@ -43,6 +45,30 @@ function validPrice(value: unknown): value is number {
     value <= 1e9 &&
     Math.abs(value * 100 - Math.round(value * 100)) < 1e-6
   );
+}
+
+// An image is optional: "" means none. Otherwise it must be an http(s) link.
+function validImageUrl(value: unknown): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const url = value.trim();
+
+  if (url === "") {
+    return true;
+  }
+
+  if (url.length > 2000) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function validStock(value: unknown): value is number {
@@ -126,9 +152,9 @@ router.get("/:id", optionalAuth, async (req, res) => {
   }
 });
 
-/** POST /products  { name, price, stockQuantity? }   (admin) */
+/** POST /products  { name, price, stockQuantity?, imageUrl? }   (admin) */
 router.post("/", requireAdmin, async (req, res) => {
-  const { name, price, stockQuantity = 0 } = req.body ?? {};
+  const { name, price, stockQuantity = 0, imageUrl = "" } = req.body ?? {};
 
   if (!validName(name) || !validPrice(price) || !validStock(stockQuantity)) {
     return res.status(400).json({
@@ -137,11 +163,18 @@ router.post("/", requireAdmin, async (req, res) => {
     });
   }
 
+  if (!validImageUrl(imageUrl)) {
+    return res
+      .status(400)
+      .json({ message: "imageUrl must be an http(s) link (max 2000 chars) or empty" });
+  }
+
   try {
     const product = await Product.create({
       name: name.trim(),
       price,
       stockQuantity,
+      imageUrl: imageUrl.trim(),
     });
 
     return res.status(201).json(toProduct(product));
@@ -151,15 +184,17 @@ router.post("/", requireAdmin, async (req, res) => {
   }
 });
 
-/** PATCH /products/:id  { name?, price?, isActive? }   (admin) */
+/** PATCH /products/:id  { name?, price?, imageUrl?, isActive? }   (admin) */
 router.patch("/:id", requireAdmin, async (req, res) => {
-  const { name, price, isActive } = req.body ?? {};
+  const { name, price, imageUrl, isActive } = req.body ?? {};
 
   if (!mongoose.isValidObjectId(req.params.id)) {
     return res.status(404).json({ message: "Product not found" });
   }
 
-  const update: Partial<Pick<IProduct, "name" | "price" | "isActive">> = {};
+  const update: Partial<
+    Pick<IProduct, "name" | "price" | "imageUrl" | "isActive">
+  > = {};
 
   if (name !== undefined) {
     if (!validName(name)) {
@@ -177,6 +212,16 @@ router.patch("/:id", requireAdmin, async (req, res) => {
     }
 
     update.price = price;
+  }
+
+  if (imageUrl !== undefined) {
+    if (!validImageUrl(imageUrl)) {
+      return res.status(400).json({
+        message: "imageUrl must be an http(s) link (max 2000 chars) or empty",
+      });
+    }
+
+    update.imageUrl = imageUrl.trim();
   }
 
   if (isActive !== undefined) {

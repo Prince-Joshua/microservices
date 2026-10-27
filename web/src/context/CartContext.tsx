@@ -13,6 +13,8 @@ export interface CartLine {
   productId: string;
   name: string;
   price: number;
+  /** Optional: carts saved before images existed don't have it. */
+  imageUrl?: string;
   /** Stock when the item was added; used as an upper bound in the UI (the server has the final say). */
   maxQuantity: number;
   quantity: number;
@@ -83,6 +85,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
               ? {
                   ...l,
                   price: product.price,
+                  imageUrl: product.imageUrl,
                   maxQuantity: product.stockQuantity,
                   quantity: Math.min(l.quantity + quantity, product.stockQuantity),
                 }
@@ -95,6 +98,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
             productId: product.id,
             name: product.name,
             price: product.price,
+            imageUrl: product.imageUrl,
             maxQuantity: product.stockQuantity,
             quantity: Math.min(quantity, product.stockQuantity),
           },

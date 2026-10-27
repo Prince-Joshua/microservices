@@ -14,10 +14,13 @@ export const productsApi = {
     request<Product>(base, `/products/${encodeURIComponent(id)}`, { signal }),
 
   // admin
-  create: (body: { name: string; price: number; stockQuantity: number }) =>
+  create: (body: { name: string; price: number; stockQuantity: number; imageUrl?: string }) =>
     request<Product>(base, "/products", { method: "POST", body }),
 
-  update: (id: string, patch: { name?: string; price?: number; isActive?: boolean }) =>
+  update: (
+    id: string,
+    patch: { name?: string; price?: number; imageUrl?: string; isActive?: boolean }
+  ) =>
     request<Product>(base, `/products/${encodeURIComponent(id)}`, { method: "PATCH", body: patch }),
 
   adjustStock: (id: string, delta: number) =>

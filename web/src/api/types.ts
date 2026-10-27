@@ -22,6 +22,8 @@ export interface Product {
   name: string;
   price: number;
   stockQuantity: number;
+  /** http(s) link to a product image; empty or missing means none. */
+  imageUrl?: string;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;

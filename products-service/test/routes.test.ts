@@ -123,6 +123,47 @@ test("create validates name, whole-cent price and stock", async () => {
   }
 });
 
+test("imageUrl must be an http(s) link, or empty", async () => {
+  const badLinks = [
+    "javascript:alert(1)",
+    "ftp://example.com/a.jpg",
+    "data:image/png;base64,AAAA",
+    "not a url",
+    "https://example.com/" + "a".repeat(2001),
+    123,
+    null,
+  ];
+
+  for (const imageUrl of badLinks) {
+    const label = String(imageUrl).slice(0, 40);
+    assert.equal(
+      await call("POST", "/products", { as: "admin", body: { name: "x", price: 1, imageUrl } }),
+      400,
+      `create ${label}`
+    );
+    assert.equal(
+      await call("PATCH", `/products/${GOOD_ID}`, { as: "admin", body: { imageUrl } }),
+      400,
+      `update ${label}`
+    );
+  }
+
+  // A good link (or an empty one, which clears the image) passes validation and
+  // reaches the database, which these tests make throw: a 500, not a 400.
+  for (const imageUrl of ["https://example.com/a.jpg", "http://cdn.example.com/b.png?w=300", ""]) {
+    assert.equal(
+      await call("POST", "/products", { as: "admin", body: { name: "x", price: 1, imageUrl } }),
+      500,
+      `create ${imageUrl}`
+    );
+    assert.equal(
+      await call("PATCH", `/products/${GOOD_ID}`, { as: "admin", body: { imageUrl } }),
+      500,
+      `update ${imageUrl}`
+    );
+  }
+});
+
 test("update and stock adjustment validate input and ids", async () => {
   assert.equal(await call("PATCH", `/products/${GOOD_ID}`, { as: "admin", body: {} }), 400);
   assert.equal(await call("PATCH", `/products/${GOOD_ID}`, { as: "admin", body: { isActive: "yes" } }), 400);

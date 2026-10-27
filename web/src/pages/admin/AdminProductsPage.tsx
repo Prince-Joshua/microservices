@@ -6,6 +6,7 @@ import { useFetch } from "../../hooks/useFetch";
 import { PageHeader } from "../../components/PageHeader";
 import { ErrorAlert } from "../../components/ErrorAlert";
 import { Pagination } from "../../components/Pagination";
+import { ProductImage } from "../../components/ProductImage";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { formatMoney } from "../../lib/format";
 import { notifyError, notifySuccess } from "../../components/ui/toaster";
@@ -138,10 +139,15 @@ export function AdminProductsPage() {
               {data?.data.map((p) => (
                 <Table.Row key={p.id}>
                   <Table.Cell>
-                    <Text fontWeight="medium">{p.name}</Text>
-                    <Text fontSize="xs" color="fg.muted" fontFamily="mono">
-                      {p.id}
-                    </Text>
+                    <HStack gap="3">
+                      <ProductImage src={p.imageUrl} alt={p.name} size="12" />
+                      <Stack gap="0">
+                        <Text fontWeight="medium">{p.name}</Text>
+                        <Text fontSize="xs" color="fg.muted" fontFamily="mono">
+                          {p.id}
+                        </Text>
+                      </Stack>
+                    </HStack>
                   </Table.Cell>
                   <Table.Cell textAlign="end">{formatMoney(p.price)}</Table.Cell>
                   <Table.Cell textAlign="end">

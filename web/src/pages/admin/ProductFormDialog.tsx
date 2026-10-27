@@ -4,6 +4,19 @@ import { productsApi } from "../../api/products";
 import type { Product } from "../../api/types";
 import { errorMessage } from "../../api/http";
 import { isWholeCents } from "../../lib/format";
+import { ProductImage } from "../../components/ProductImage";
+
+/** Empty is fine (no image); otherwise it must be an http(s) link. */
+function isImageLink(value: string): boolean {
+  if (!value) return true;
+  if (value.length > 2000) return false;
+  try {
+    const { protocol } = new URL(value);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
 
 /** Create (product omitted) or edit. Mount it only while open so its fields start fresh. */
 export function ProductFormDialog({
@@ -19,6 +32,7 @@ export function ProductFormDialog({
   const [name, setName] = useState(product?.name ?? "");
   const [price, setPrice] = useState(product ? String(product.price) : "");
   const [stock, setStock] = useState("0");
+  const [imageUrl, setImageUrl] = useState(product?.imageUrl ?? "");
   const [isActive, setIsActive] = useState(product?.isActive ?? true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -32,6 +46,7 @@ export function ProductFormDialog({
     if (price === "" || !Number.isFinite(priceNum) || priceNum < 0 || !isWholeCents(priceNum)) {
       return setError("Price must be 0 or more, with at most two decimals");
     }
+    if (!isImageLink(imageUrl.trim())) return setError("Image link must start with http:// or https://");
     if (!editing && (!Number.isSafeInteger(stockNum) || stockNum < 0)) {
       return setError("Stock must be a whole number, 0 or more");
     }
@@ -40,8 +55,8 @@ export function ProductFormDialog({
     setError(null);
     try {
       const saved = product
-        ? await productsApi.update(product.id, { name: name.trim(), price: priceNum, isActive })
-        : await productsApi.create({ name: name.trim(), price: priceNum, stockQuantity: stockNum });
+        ? await productsApi.update(product.id, { name: name.trim(), price: priceNum, imageUrl: imageUrl.trim(), isActive })
+        : await productsApi.create({ name: name.trim(), price: priceNum, stockQuantity: stockNum, imageUrl: imageUrl.trim() });
       onSaved(saved);
     } catch (err) {
       setError(errorMessage(err));
@@ -68,6 +83,21 @@ export function ProductFormDialog({
                   <Field.Label>Price</Field.Label>
                   <Input type="number" min={0} step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} />
                 </Field.Root>
+                <Field.Root>
+                  <Field.Label>Image link (optional)</Field.Label>
+                  <Input
+                    type="url"
+                    inputMode="url"
+                    placeholder="https://example.com/photo.jpg"
+                    value={imageUrl}
+                    maxLength={2000}
+                    onChange={(e) => setImageUrl(e.target.value)}
+                  />
+                  <Field.HelperText>Paste a direct link to an image.</Field.HelperText>
+                </Field.Root>
+                {imageUrl.trim() && isImageLink(imageUrl.trim()) && (
+                  <ProductImage src={imageUrl.trim()} alt="Preview" ratio={16 / 9} />
+                )}
                 {!editing ? (
                   <Field.Root>
                     <Field.Label>Initial stock</Field.Label>

@@ -17,6 +17,8 @@ export interface IProduct {
   name: string;
   price: number;
   stockQuantity: number;
+  /** Optional link to a product image (http/https). Empty string = no image. */
+  imageUrl: string;
   isActive: boolean;
   reservations: IReservation[];
   stockReturns: IStockReturn[];
@@ -87,6 +89,12 @@ const productSchema = new mongoose.Schema<IProduct>(
       required: true,
       min: 0,
       default: 0,
+    },
+    imageUrl: {
+      type: String,
+      trim: true,
+      maxlength: 2000,
+      default: "",
     },
     isActive: {
       type: Boolean,

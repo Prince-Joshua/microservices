@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { Link as RouterLink, useNavigate } from "react-router-dom";
-import { Alert, Box, Button, Flex, HStack, Input, Separator, Stack, Table, Text } from "@chakra-ui/react";
+import { Alert, Box, Button, Flex, HStack, Input, Separator, Spinner, Stack, Table, Text } from "@chakra-ui/react";
 import { useCart } from "../context/CartContext";
 import { useAuth } from "../context/AuthContext";
 import { ordersApi } from "../api/orders";
 import { ApiError, errorMessage } from "../api/http";
 import { PageHeader } from "../components/PageHeader";
+import { ProductImage } from "../components/ProductImage";
 import { formatMoney } from "../lib/format";
 import { PENDING_ORDER_KEY } from "../lib/storage";
 import { toaster } from "../components/ui/toaster";
@@ -16,6 +17,7 @@ export function CartPage() {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [redirecting, setRedirecting] = useState(false);
 
   const checkout = async () => {
     setBusy(true);
@@ -46,6 +48,7 @@ export function CartPage() {
       const url = data.payment?.authorizationUrl;
       if (url) {
         // Off to Paystack; it sends the customer back to /payment/callback.
+        setRedirecting(true);
         window.location.assign(url);
         return;
       }
@@ -64,6 +67,19 @@ export function CartPage() {
       setBusy(false);
     }
   };
+
+  // The cart is cleared once the order exists; keep this screen up until the browser leaves for Paystack.
+  if (redirecting) {
+    return (
+      <>
+        <PageHeader title="Your cart" />
+        <Stack align="center" gap="3" py="16" color="fg.muted">
+          <Spinner size="lg" />
+          <Text>Order placed. Redirecting you to Paystack…</Text>
+        </Stack>
+      </>
+    );
+  }
 
   if (lines.length === 0) {
     return (
@@ -107,7 +123,12 @@ export function CartPage() {
           <Table.Body>
             {lines.map((l) => (
               <Table.Row key={l.productId}>
-                <Table.Cell fontWeight="medium">{l.name}</Table.Cell>
+                <Table.Cell fontWeight="medium">
+                  <HStack gap="3">
+                    <ProductImage src={l.imageUrl} alt={l.name} size="12" />
+                    {l.name}
+                  </HStack>
+                </Table.Cell>
                 <Table.Cell textAlign="end">{formatMoney(l.price)}</Table.Cell>
                 <Table.Cell>
                   <Input

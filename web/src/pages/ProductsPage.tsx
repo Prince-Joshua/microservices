@@ -7,6 +7,7 @@ import { useCart } from "../context/CartContext";
 import { PageHeader } from "../components/PageHeader";
 import { ErrorAlert } from "../components/ErrorAlert";
 import { Pagination } from "../components/Pagination";
+import { ProductImage } from "../components/ProductImage";
 import { formatMoney } from "../lib/format";
 import { toaster } from "../components/ui/toaster";
 
@@ -25,7 +26,8 @@ function ProductCard({ product }: { product: Product }) {
   const maxed = inCart >= product.stockQuantity;
 
   return (
-    <Card.Root>
+    <Card.Root overflow="hidden">
+      <ProductImage src={product.imageUrl} alt={product.name} rounded="none" />
       <Card.Body gap="2">
         <Card.Title>{product.name}</Card.Title>
         <Text fontSize="xl" fontWeight="semibold" color="brand.fg">
@@ -91,7 +93,7 @@ export function ProductsPage() {
       {loading && !data ? (
         <SimpleGrid columns={{ base: 1, sm: 2, lg: 4 }} gap="4">
           {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} height="40" />
+            <Skeleton key={i} height="72" />
           ))}
         </SimpleGrid>
       ) : data && data.data.length === 0 ? (
