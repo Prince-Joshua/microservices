@@ -15,6 +15,12 @@ import {
   registerByIp,
 } from "../middleware/auth-limits.js";
 import {
+  clearRefreshCookie,
+  csrfGuard,
+  readRefreshCookie,
+  setRefreshCookie,
+} from "../services/refresh-cookie.js";
+import {
   issueRefreshToken,
   revokeByToken,
   revokeFamily,
@@ -72,10 +78,11 @@ router.post("/register", limitByIp(registerByIp), async (req, res) => {
 });
 
 /**
- * POST /auth/login  { email, password }  ->  { token, refreshToken, user }
+ * POST /auth/login  { email, password }  ->  { token, user }
  *
- * `token` is a short-lived JWT; `refreshToken` is exchanged at /auth/refresh
- * for a new pair when it expires.
+ * `token` is a short-lived JWT. The refresh token is set as an HttpOnly
+ * cookie (never in the body) and is exchanged at /auth/refresh for a new
+ * pair when the JWT expires.
  */
 router.post("/login", limitByIp(loginByIp), async (req, res) => {
   const { email, password } = (req.body ?? {}) as Record<string, unknown>;
@@ -116,11 +123,12 @@ router.post("/login", limitByIp(loginByIp), async (req, res) => {
 
     loginFailures.reset(accountKey);
 
-    const { token: refreshToken } = await issueRefreshToken(String(user._id));
+    const { token: refreshToken, expiresAt } = await issueRefreshToken(String(user._id));
 
+    setRefreshCookie(res, refreshToken, expiresAt);
+    res.set("Cache-Control", "no-store");
     res.json({
       token: signAccessToken(user),
-      refreshToken,
       user: publicUser(user),
     });
   } catch (error) {
@@ -130,24 +138,25 @@ router.post("/login", limitByIp(loginByIp), async (req, res) => {
 });
 
 /**
- * POST /auth/refresh  { refreshToken }  ->  { token, refreshToken, user }
+ * POST /auth/refresh  (refresh-token cookie)  ->  { token, user }
  *
- * The refresh token is single-use: the response carries a replacement, and
- * the old one stops working. The user is re-read, so a deactivation or a new
- * role takes effect here.
+ * The refresh token is single-use: the response sets a replacement cookie,
+ * and the old token stops working. The user is re-read, so a deactivation or
+ * a new role takes effect here. Needs the X-Requested-With header and an allowed Origin (CSRF).
  */
-router.post("/refresh", limitByIp(refreshByIp), async (req, res) => {
-  const { refreshToken } = (req.body ?? {}) as Record<string, unknown>;
+router.post("/refresh", limitByIp(refreshByIp), csrfGuard, async (req, res) => {
   const rejected = { message: "Invalid or expired refresh token" };
 
   try {
-    const result = await rotateRefreshToken(refreshToken);
+    const result = await rotateRefreshToken(readRefreshCookie(req));
 
     if (!result.ok) {
       if (result.reason === "reused") {
         console.warn("Refresh token reuse detected; session revoked");
       }
 
+      // A "concurrent" loser keeps its cookie: the winner's response is about to replace it.
+      if (result.reason !== "concurrent") clearRefreshCookie(res);
       res.status(401).json(rejected);
       return;
     }
@@ -156,13 +165,15 @@ router.post("/refresh", limitByIp(refreshByIp), async (req, res) => {
 
     if (!user || !user.isActive) {
       await revokeFamily(result.familyId);
+      clearRefreshCookie(res);
       res.status(401).json(rejected);
       return;
     }
 
+    setRefreshCookie(res, result.token, result.expiresAt);
+    res.set("Cache-Control", "no-store");
     res.json({
       token: signAccessToken(user),
-      refreshToken: result.token,
       user: publicUser(user),
     });
   } catch (error) {
@@ -172,15 +183,14 @@ router.post("/refresh", limitByIp(refreshByIp), async (req, res) => {
 });
 
 /**
- * POST /auth/logout  { refreshToken }  ->  204
- * Revokes the whole session. Always 204 for an unknown token, so it can be
- * called blindly on sign-out.
+ * POST /auth/logout  (refresh-token cookie)  ->  204
+ * Revokes the whole session and clears the cookie. Always 204 for an unknown
+ * token, so it can be called blindly on sign-out. Needs X-Requested-With and an allowed Origin.
  */
-router.post("/logout", async (req, res) => {
-  const { refreshToken } = (req.body ?? {}) as Record<string, unknown>;
-
+router.post("/logout", csrfGuard, async (req, res) => {
   try {
-    await revokeByToken(refreshToken);
+    await revokeByToken(readRefreshCookie(req));
+    clearRefreshCookie(res);
     res.status(204).end();
   } catch (error) {
     console.error("Logout failed:", error);

@@ -37,20 +37,26 @@ by its signature.
 | Method | Path | Access | Purpose |
 |---|---|---|---|
 | POST | `/auth/register` | public | `{ name, email, password }` -> 201 customer |
-| POST | `/auth/login` | public | `{ email, password }` -> `{ token, refreshToken, user }`. `token` is a short-lived JWT (`JWT_EXPIRES_IN`, 15 minutes) |
-| POST | `/auth/refresh` | public | `{ refreshToken }` -> a new `{ token, refreshToken, user }`. Each refresh token works **once**; the old one is then dead |
-| POST | `/auth/logout` | public | `{ refreshToken }` -> 204. Ends that session; harmless with an unknown token |
+| POST | `/auth/login` | public | `{ email, password }` -> `{ token, user }` and a `refresh_token` cookie. `token` is a short-lived JWT (`JWT_EXPIRES_IN`, 15 minutes) |
+| POST | `/auth/refresh` | cookie | no body; needs the `refresh_token` cookie and an `X-Requested-With` header -> a new `{ token, user }` and a replacement cookie. Each refresh token works **once**; the old one is then dead |
+| POST | `/auth/logout` | cookie | no body; needs the cookie and `X-Requested-With` -> 204 and the cookie is cleared. Ends that session; harmless with an unknown token |
 | GET | `/users/me` | customer | own profile |
 | PATCH | `/users/me` | customer | `{ name }` |
-| POST | `/users/me/password` | customer | `{ currentPassword, newPassword, refreshToken? }` -> 204. Signs out every other session; send the current `refreshToken` to stay signed in here |
+| POST | `/users/me/password` | customer | `{ currentPassword, newPassword }` -> 204. Signs out every other session; the browser's `refresh_token` cookie keeps this one signed in |
 | DELETE | `/users/me` | customer | deactivate own account -> 204 |
 | GET | `/users` | admin | `?page&limit&email` |
 | GET | `/users/:id` | admin | one user |
 | PATCH | `/users/:id` | admin | `{ isActive?, role? }` (not on yourself) |
 | GET | `/internal/users/:id` | internal | `{ id, isActive, role, email }`; the Orders and Products services treat this, not the token, as the truth |
 
-**Sessions.** A login returns a short-lived access token and a long-lived refresh token
-(`REFRESH_TOKEN_TTL_DAYS`, 30 by default; a session never lasts past `REFRESH_MAX_SESSION_DAYS`, 90).
+**Sessions.** A login returns a short-lived access token in the body and sets a long-lived refresh token as an
+`HttpOnly; SameSite=Strict` cookie (`REFRESH_TOKEN_TTL_DAYS`, 30 by default; a session never lasts past
+`REFRESH_MAX_SESSION_DAYS`, 90). Page scripts can't read the cookie, so an XSS bug or a poisoned dependency can't
+steal it; the web app keeps the access token in memory only. The cookie's `Path` is `/api/users` (the address the
+browser sees, set with `REFRESH_COOKIE_PATH`) and it is `Secure` in production (`REFRESH_COOKIE_SECURE=false` for
+plain http on anything but localhost). Refresh and logout also require an `X-Requested-With` header, and, when `ALLOWED_ORIGINS` is set,
+an `Origin` from that list, so a cross-site request can't use the cookie. The API must be same-origin with the page (the Vercel rewrites and the gateway are);
+a cross-origin `VITE_*_URL` would also need CORS with credentials.
 Refresh tokens are random, stored only as a SHA-256 hash, and **rotated on every use**. Presenting a token
 that was already used (outside a 10-second grace window for two tabs refreshing at once) revokes the whole
 session, since that means the token was copied. Signing out, changing the password (other sessions) and

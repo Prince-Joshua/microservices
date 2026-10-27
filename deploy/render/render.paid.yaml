@@ -58,6 +58,8 @@ services:
         sync: false           # MongoDB Atlas connection string ending in /users
       - key: JWT_EXPIRES_IN
         value: 15m
+      - key: ALLOWED_ORIGINS
+        sync: false           # the public URL of the gateway/app (refresh/logout CSRF check)
       - fromGroup: shopfront-jwt
       - fromGroup: shopfront-internal
 

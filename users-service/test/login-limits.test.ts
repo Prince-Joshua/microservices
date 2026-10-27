@@ -76,7 +76,7 @@ after(() => server.close());
 const post = (path: string, body: unknown) =>
   fetch(`${base}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-requested-with": "fetch" },
     body: JSON.stringify(body),
   });
 
@@ -122,7 +122,7 @@ test("refresh is limited per address", async () => {
   const statuses: number[] = [];
 
   for (let i = 0; i < 6; i++) {
-    statuses.push((await post("/auth/refresh", { refreshToken: "nope" })).status);
+    statuses.push((await post("/auth/refresh", {})).status);
   }
 
   assert.deepEqual(statuses, [401, 401, 401, 401, 429, 429]);

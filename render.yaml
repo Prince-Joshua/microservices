@@ -43,6 +43,8 @@ services:
         sync: false               # MongoDB Atlas string ending in /users
       - key: JWT_EXPIRES_IN
         value: 15m
+      - key: ALLOWED_ORIGINS
+        sync: false               # your Vercel URL, e.g. https://your-app.vercel.app (refresh/logout CSRF check)
       - key: TRUST_PROXY         # Vercel rewrite + Render's edge = 2 hops; the login rate limit reads the client IP through them
         value: 2
       - fromGroup: shopfront-jwt

@@ -4,13 +4,22 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import { usersApi } from "../api/users";
 import { FORBIDDEN_EVENT, SESSION_REFRESHED_EVENT, UNAUTHORIZED_EVENT } from "../api/http";
 import type { User } from "../api/types";
-import { AUTH_KEY, loadAuth, saveAuth } from "../lib/storage";
+import {
+  announceSessionChange,
+  clearSession,
+  hasSession,
+  loadUser,
+  onSessionChange,
+  saveUser,
+  setToken,
+} from "../lib/storage";
 import { toaster } from "../components/ui/toaster";
 
 interface AuthValue {
@@ -30,20 +39,22 @@ const SYNC_INTERVAL_MS = 5 * 60_000;
 const SYNC_MIN_GAP_MS = 30_000;
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUserState] = useState<User | null>(() => loadAuth()?.user ?? null);
+  const [user, setUserState] = useState<User | null>(loadUser);
 
   const logout = useCallback(() => {
-    // End the session on the server too, so a copied refresh token is useless. Best effort.
-    const refreshToken = loadAuth()?.refreshToken;
-    if (refreshToken) usersApi.logout(refreshToken).catch(() => undefined);
-    saveAuth(null);
+    // End the session on the server too (it also clears the refresh cookie). Best effort.
+    usersApi.logout().catch(() => undefined);
+    clearSession();
     setUserState(null);
+    announceSessionChange();
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
-    const { token, refreshToken, user: loggedIn } = await usersApi.login(email.trim(), password);
-    saveAuth({ token, refreshToken, user: loggedIn });
+    const { token, user: loggedIn } = await usersApi.login(email.trim(), password);
+    setToken(token);
+    saveUser(loggedIn);
     setUserState(loggedIn);
+    announceSessionChange();
     return loggedIn;
   }, []);
 
@@ -56,8 +67,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const setUser = useCallback((next: User) => {
-    const current = loadAuth();
-    if (current) saveAuth({ ...current, user: next });
+    if (hasSession()) {
+      saveUser(next);
+      announceSessionChange();
+    }
     setUserState(next);
   }, []);
 
@@ -86,7 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       try {
         const fresh = await usersApi.me();
-        const current = loadAuth()?.user;
+        const current = loadUser();
         if (stopped || !current) return;
         if (
           fresh.role !== current.role ||
@@ -121,20 +134,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [userId, setUser]);
 
-  // Signing in or out in another tab: follow it. (This event only fires in the other tabs.)
-  useEffect(() => {
-    const onStorage = (event: StorageEvent) => {
-      if (event.key === AUTH_KEY || event.key === null) setUserState(loadAuth()?.user ?? null);
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
+  // Signing in or out in another tab: follow it. (A tab never hears its own announcements.)
+  // Tabs share the refresh cookie but not the in-memory access token: after a switch of
+  // account the old token is dropped, and the next request gets one for the new account.
+  const shownId = useRef(user?.id);
+  shownId.current = user?.id;
+
+  useEffect(
+    () =>
+      onSessionChange(() => {
+        const next = loadUser();
+        if (next?.id !== shownId.current) setToken(null);
+        setUserState(next);
+      }),
+    []
+  );
 
   // The session is over: the refresh token was refused (expired, signed out elsewhere, account deactivated).
   useEffect(() => {
     const onUnauthorized = () => {
       // Several requests can fail together; react to the first only.
-      if (!loadAuth()) return;
+      if (!hasSession()) return;
       logout();
       toaster.create({
         type: "warning",

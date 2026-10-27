@@ -40,7 +40,7 @@ export interface Session {
 export async function issueRefreshToken(
   userId: string,
   session?: Session
-): Promise<{ token: string; familyId: string }> {
+): Promise<{ token: string; familyId: string; expiresAt: Date }> {
   const now = Date.now();
   const familyId = session?.familyId ?? randomUUID();
   const sessionStartedAt = session?.sessionStartedAt ?? new Date(now);
@@ -58,11 +58,11 @@ export async function issueRefreshToken(
     revokedAt: null,
   });
 
-  return { token, familyId };
+  return { token, familyId, expiresAt };
 }
 
 export type RotateResult =
-  | { ok: true; userId: string; token: string; familyId: string }
+  | { ok: true; userId: string; token: string; familyId: string; expiresAt: Date }
   | { ok: false; reason: "invalid" | "concurrent" | "reused" };
 
 /**
