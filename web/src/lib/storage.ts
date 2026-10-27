@@ -1,10 +1,13 @@
 import type { User } from "../api/types";
 
-const AUTH_KEY = "shop.auth";
+export const AUTH_KEY = "shop.auth";
 export const PENDING_ORDER_KEY = "shop.pendingOrder";
 
 export interface StoredAuth {
+  /** Short-lived access token (JWT), sent with every request. */
   token: string;
+  /** Long-lived, single-use token that gets a new pair when `token` expires. */
+  refreshToken?: string;
   user: User;
 }
 
@@ -29,7 +32,8 @@ export function loadAuth(): StoredAuth | null {
     const raw = localStorage.getItem(AUTH_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as StoredAuth;
-    if (!parsed?.token || !parsed.user || isExpired(parsed.token)) {
+    // An expired access token is fine while a refresh token can replace it.
+    if (!parsed?.token || !parsed.user || (isExpired(parsed.token) && !parsed.refreshToken)) {
       localStorage.removeItem(AUTH_KEY);
       return null;
     }
@@ -50,4 +54,8 @@ export function saveAuth(auth: StoredAuth | null): void {
 
 export function getToken(): string | null {
   return loadAuth()?.token ?? null;
+}
+
+export function getRefreshToken(): string | null {
+  return loadAuth()?.refreshToken ?? null;
 }

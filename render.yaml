@@ -1,3 +1,21 @@
+# FREE-TIER Blueprint: four Docker web services on Render's free plan.
+# (Production/paid design with a private network + gateway: deploy/render/render.paid.yaml)
+#
+# What free means here (details in deploy/RENDER-VERCEL.md):
+#  - Free web services cannot receive private-network traffic and private services have no free
+#    tier, so every service is PUBLIC and the services call each other over their public URLs.
+#    There is no gateway: Vercel forwards an allow-list of API paths (web/vercel.json).
+#  - Services spin down after 15 idle minutes and take up to a minute to wake, so
+#    HTTP_TIMEOUT_MS is raised to 60 s (the code defaults are 3 s and 8 s).
+#  - 750 free instance hours per month are shared by all four services.
+#  - Databases are NOT on Render: MongoDB Atlas (users, products) and Supabase Postgres
+#    (orders, payments), connected through the secrets you are prompted for.
+#  - Pre-deploy commands and shell access are not assumed on free: run the Prisma migrations
+#    and create-admin from your own computer (see the guide).
+#
+# Region cannot be changed after creation; keep it close to your customers and your databases.
+# Check this file with:  render blueprints validate
+
 envVarGroups:
   - name: shopfront-jwt
     envVars:
@@ -5,7 +23,7 @@ envVarGroups:
         generateValue: true
   - name: shopfront-internal
     envVars:
-      - key: INTERNAL_API_TOKEN
+      - key: INTERNAL_API_TOKEN     # the only protection for /internal/* on a public URL: keep it secret
         generateValue: true
 
 services:
@@ -22,9 +40,9 @@ services:
       - key: PORT
         value: 10000
       - key: MONGO_URL
-        sync: false
+        sync: false               # MongoDB Atlas string ending in /users
       - key: JWT_EXPIRES_IN
-        value: 1h
+        value: 15m
       - fromGroup: shopfront-jwt
       - fromGroup: shopfront-internal
 
@@ -41,7 +59,7 @@ services:
       - key: PORT
         value: 10000
       - key: MONGO_URL
-        sync: false
+        sync: false               # MongoDB Atlas string ending in /products
       - key: HTTP_TIMEOUT_MS
         value: 60000
       - key: ORDERS_SERVICE_URL
@@ -62,7 +80,7 @@ services:
       - key: PORT
         value: 10000
       - key: POSTGRES_URL
-        sync: false
+        sync: false               # Supabase SESSION POOLER string, orders project, + ?connection_limit=5
       - key: PAYMENT_CURRENCY
         value: NGN
       - key: HTTP_TIMEOUT_MS
@@ -89,11 +107,11 @@ services:
       - key: PORT
         value: 10000
       - key: POSTGRES_URL
-        sync: false
+        sync: false               # Supabase SESSION POOLER string, payments project, + ?connection_limit=5
       - key: PAYSTACK_SECRET_KEY
-        sync: false
+        sync: false               # sk_test_... until you go live. Only this service gets it.
       - key: PAYMENT_CALLBACK_URL
-        sync: false
+        sync: false               # https://<your-vercel-domain>/payment/callback
       - key: HTTP_TIMEOUT_MS
         value: 60000
       - key: ORDERS_SERVICE_URL

@@ -6,6 +6,7 @@ import { requireAuth, requireAdmin, currentUser } from "../middleware/auth.js";
 import { hashPassword, verifyPassword } from "../services/password.js";
 import { publicUser, parsePagination } from "../services/public-user.js";
 import { validPassword } from "./auth.routes.js";
+import { revokeAllForUser } from "../services/refresh-tokens.js";
 
 const router = Router();
 
@@ -60,9 +61,13 @@ router.patch("/me", async (req, res) => {
   }
 });
 
-/** POST /users/me/password  { currentPassword, newPassword } */
+/**
+ * POST /users/me/password  { currentPassword, newPassword, refreshToken? }
+ * Signs every other session out. Send the current refreshToken to stay
+ * signed in on this device.
+ */
 router.post("/me/password", async (req, res) => {
-  const { currentPassword, newPassword } = (req.body ?? {}) as Record<
+  const { currentPassword, newPassword, refreshToken } = (req.body ?? {}) as Record<
     string,
     unknown
   >;
@@ -92,6 +97,7 @@ router.post("/me/password", async (req, res) => {
 
     user.passwordHash = await hashPassword(newPassword);
     await user.save();
+    await revokeAllForUser(String(user._id), refreshToken);
 
     res.status(204).end();
   } catch (error) {
@@ -112,6 +118,7 @@ router.delete("/me", async (req, res) => {
       { _id: currentUser(req).id },
       { $set: { isActive: false } }
     );
+    await revokeAllForUser(currentUser(req).id);
     res.status(204).end();
   } catch (error) {
     console.error("Account deactivation failed:", error);
@@ -215,6 +222,11 @@ router.patch("/:id", requireAdmin, async (req, res) => {
     if (!user) {
       res.status(404).json({ message: "User not found" });
       return;
+    }
+
+    // A deactivated account can't refresh its way back in.
+    if (update.isActive === false) {
+      await revokeAllForUser(String(user._id));
     }
 
     res.json(publicUser(user));

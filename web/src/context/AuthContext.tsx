@@ -8,9 +8,9 @@ import {
   type ReactNode,
 } from "react";
 import { usersApi } from "../api/users";
-import { UNAUTHORIZED_EVENT } from "../api/http";
+import { SESSION_REFRESHED_EVENT, UNAUTHORIZED_EVENT } from "../api/http";
 import type { User } from "../api/types";
-import { loadAuth, saveAuth } from "../lib/storage";
+import { AUTH_KEY, loadAuth, saveAuth } from "../lib/storage";
 import { toaster } from "../components/ui/toaster";
 
 interface AuthValue {
@@ -28,13 +28,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUserState] = useState<User | null>(() => loadAuth()?.user ?? null);
 
   const logout = useCallback(() => {
+    // End the session on the server too, so a copied refresh token is useless. Best effort.
+    const refreshToken = loadAuth()?.refreshToken;
+    if (refreshToken) usersApi.logout(refreshToken).catch(() => undefined);
     saveAuth(null);
     setUserState(null);
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
-    const { token, user: loggedIn } = await usersApi.login(email.trim(), password);
-    saveAuth({ token, user: loggedIn });
+    const { token, refreshToken, user: loggedIn } = await usersApi.login(email.trim(), password);
+    saveAuth({ token, refreshToken, user: loggedIn });
     setUserState(loggedIn);
     return loggedIn;
   }, []);
@@ -49,13 +52,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const setUser = useCallback((next: User) => {
     const current = loadAuth();
-    if (current) saveAuth({ token: current.token, user: next });
+    if (current) saveAuth({ ...current, user: next });
     setUserState(next);
   }, []);
 
-  // Any 401 on an authenticated call means the token expired or the account was deactivated.
+  // A silent token refresh can bring a changed name or role.
+  useEffect(() => {
+    const onRefreshed = (event: Event) => setUserState((event as CustomEvent<User>).detail);
+    window.addEventListener(SESSION_REFRESHED_EVENT, onRefreshed);
+    return () => window.removeEventListener(SESSION_REFRESHED_EVENT, onRefreshed);
+  }, []);
+
+  // Signing in or out in another tab: follow it. (This event only fires in the other tabs.)
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === AUTH_KEY || event.key === null) setUserState(loadAuth()?.user ?? null);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  // The session is over: the refresh token was refused (expired, signed out elsewhere, account deactivated).
   useEffect(() => {
     const onUnauthorized = () => {
+      // Several requests can fail together; react to the first only.
+      if (!loadAuth()) return;
       logout();
       toaster.create({
         type: "warning",

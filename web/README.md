@@ -50,7 +50,7 @@ URLs and add CORS to the services. The payments service is never called from the
   while the order is still `AWAITING_PAYMENT`.
 - **Unpaid orders** show the 30-minute deadline; `POST /orders/:id/pay` re-issues the checkout link.
 - **Admin guards:** admins can't change their own role/status (the API refuses it, so the UI disables it).
-- **401** on any authenticated call signs the user out with a toast.
+- **Staying signed in:** the access token is short-lived. When it expires (or a call gets a 401) the app swaps the refresh token for a new pair and repeats the call once, so people aren't kicked out every 15 minutes. Parallel calls share one refresh. Only a refresh the server *refuses* (expired, signed out elsewhere, account deactivated) signs the user out with a toast; a network error or a sleeping server doesn't. Signing out also revokes the session on the server, and signing in or out in one tab is followed by the others.
 - Prices are formatted with `VITE_CURRENCY` (default `NGN`); orders use their own `currency`.
 
 ## Customising the look

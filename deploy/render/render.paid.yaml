@@ -57,7 +57,7 @@ services:
       - key: MONGO_URL
         sync: false           # MongoDB Atlas connection string ending in /users
       - key: JWT_EXPIRES_IN
-        value: 1h
+        value: 15m
       - fromGroup: shopfront-jwt
       - fromGroup: shopfront-internal
 

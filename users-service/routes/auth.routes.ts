@@ -1,6 +1,4 @@
 import { Router } from "express";
-import jwt, { type SignOptions } from "jsonwebtoken";
-
 import { User } from "../models/user.model.js";
 import {
   hashPassword,
@@ -8,6 +6,13 @@ import {
   DUMMY_HASH,
 } from "../services/password.js";
 import { publicUser } from "../services/public-user.js";
+import { signAccessToken } from "../services/access-token.js";
+import {
+  issueRefreshToken,
+  revokeByToken,
+  revokeFamily,
+  rotateRefreshToken,
+} from "../services/refresh-tokens.js";
 
 const router = Router();
 
@@ -60,7 +65,10 @@ router.post("/register", async (req, res) => {
 });
 
 /**
- * POST /auth/login  { email, password }  ->  { token, user }
+ * POST /auth/login  { email, password }  ->  { token, refreshToken, user }
+ *
+ * `token` is a short-lived JWT; `refreshToken` is exchanged at /auth/refresh
+ * for a new pair when it expires.
  */
 router.post("/login", async (req, res) => {
   const { email, password } = (req.body ?? {}) as Record<string, unknown>;
@@ -87,16 +95,75 @@ router.post("/login", async (req, res) => {
       return;
     }
 
-    const token = jwt.sign({ role: user.role }, String(process.env.JWT_SECRET), {
-      algorithm: "HS256",
-      subject: String(user._id),
-      expiresIn: (process.env.JWT_EXPIRES_IN || "1h") as SignOptions["expiresIn"],
-    });
+    const { token: refreshToken } = await issueRefreshToken(String(user._id));
 
-    res.json({ token, user: publicUser(user) });
+    res.json({
+      token: signAccessToken(user),
+      refreshToken,
+      user: publicUser(user),
+    });
   } catch (error) {
     console.error("Login failed:", error);
     res.status(500).json({ message: "Unable to log in" });
+  }
+});
+
+/**
+ * POST /auth/refresh  { refreshToken }  ->  { token, refreshToken, user }
+ *
+ * The refresh token is single-use: the response carries a replacement, and
+ * the old one stops working. The user is re-read, so a deactivation or a new
+ * role takes effect here.
+ */
+router.post("/refresh", async (req, res) => {
+  const { refreshToken } = (req.body ?? {}) as Record<string, unknown>;
+  const rejected = { message: "Invalid or expired refresh token" };
+
+  try {
+    const result = await rotateRefreshToken(refreshToken);
+
+    if (!result.ok) {
+      if (result.reason === "reused") {
+        console.warn("Refresh token reuse detected; session revoked");
+      }
+
+      res.status(401).json(rejected);
+      return;
+    }
+
+    const user = await User.findById(result.userId);
+
+    if (!user || !user.isActive) {
+      await revokeFamily(result.familyId);
+      res.status(401).json(rejected);
+      return;
+    }
+
+    res.json({
+      token: signAccessToken(user),
+      refreshToken: result.token,
+      user: publicUser(user),
+    });
+  } catch (error) {
+    console.error("Token refresh failed:", error);
+    res.status(500).json({ message: "Unable to refresh the session" });
+  }
+});
+
+/**
+ * POST /auth/logout  { refreshToken }  ->  204
+ * Revokes the whole session. Always 204 for an unknown token, so it can be
+ * called blindly on sign-out.
+ */
+router.post("/logout", async (req, res) => {
+  const { refreshToken } = (req.body ?? {}) as Record<string, unknown>;
+
+  try {
+    await revokeByToken(refreshToken);
+    res.status(204).end();
+  } catch (error) {
+    console.error("Logout failed:", error);
+    res.status(500).json({ message: "Unable to sign out" });
   }
 });
 

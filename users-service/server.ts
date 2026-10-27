@@ -11,6 +11,7 @@ import mongoose from "mongoose";
 import { connectDatabase } from "./config/database.js";
 import { internalAuth } from "./middleware/internal-auth.js";
 import { User } from "./models/user.model.js";
+import { RefreshToken } from "./models/refresh-token.model.js";
 import authRoutes from "./routes/auth.routes.js";
 import usersRoutes from "./routes/users.routes.js";
 import internalRoutes from "./routes/internal.routes.js";
@@ -57,6 +58,7 @@ async function startServer(): Promise<void> {
 
     // Build the unique email index before taking traffic.
     await User.init();
+    await RefreshToken.init();
 
     const server = app.listen(PORT, () => {
       console.log(`Users service running on port ${PORT}`);

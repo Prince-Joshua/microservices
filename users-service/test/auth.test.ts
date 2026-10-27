@@ -6,6 +6,8 @@ import type { AddressInfo } from "node:net";
 import express from "express";
 import jwt from "jsonwebtoken";
 
+import { createFakeRefreshModel } from "./helpers/refresh-store.js";
+
 process.env.JWT_SECRET = "test-secret";
 
 interface FakeUser {
@@ -57,6 +59,13 @@ mock.module(new URL("../models/user.model.js", import.meta.url).href, {
   namedExports: { User },
 });
 
+// Login now also stores a refresh token; keep that in memory too.
+const refreshStore = createFakeRefreshModel();
+
+mock.module(new URL("../models/refresh-token.model.js", import.meta.url).href, {
+  namedExports: { RefreshToken: refreshStore.model },
+});
+
 const { hashPassword, verifyPassword } = await import("../services/password.js");
 const { default: authRoutes } = await import("../routes/auth.routes.js");
 
@@ -81,6 +90,7 @@ after(() => {
 
 beforeEach(() => {
   users.length = 0;
+  refreshStore.rows.length = 0;
 });
 
 async function post(path: string, body: unknown) {

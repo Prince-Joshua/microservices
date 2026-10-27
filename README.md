@@ -37,15 +37,25 @@ by its signature.
 | Method | Path | Access | Purpose |
 |---|---|---|---|
 | POST | `/auth/register` | public | `{ name, email, password }` -> 201 customer |
-| POST | `/auth/login` | public | `{ email, password }` -> `{ token, user }` |
+| POST | `/auth/login` | public | `{ email, password }` -> `{ token, refreshToken, user }`. `token` is a short-lived JWT (`JWT_EXPIRES_IN`, 15 minutes) |
+| POST | `/auth/refresh` | public | `{ refreshToken }` -> a new `{ token, refreshToken, user }`. Each refresh token works **once**; the old one is then dead |
+| POST | `/auth/logout` | public | `{ refreshToken }` -> 204. Ends that session; harmless with an unknown token |
 | GET | `/users/me` | customer | own profile |
 | PATCH | `/users/me` | customer | `{ name }` |
-| POST | `/users/me/password` | customer | `{ currentPassword, newPassword }` -> 204 |
+| POST | `/users/me/password` | customer | `{ currentPassword, newPassword, refreshToken? }` -> 204. Signs out every other session; send the current `refreshToken` to stay signed in here |
 | DELETE | `/users/me` | customer | deactivate own account -> 204 |
 | GET | `/users` | admin | `?page&limit&email` |
 | GET | `/users/:id` | admin | one user |
 | PATCH | `/users/:id` | admin | `{ isActive?, role? }` (not on yourself) |
 | GET | `/internal/users/:id` | internal | `{ id, isActive, email }` for Orders |
+
+**Sessions.** A login returns a short-lived access token and a long-lived refresh token
+(`REFRESH_TOKEN_TTL_DAYS`, 30 by default; a session never lasts past `REFRESH_MAX_SESSION_DAYS`, 90).
+Refresh tokens are random, stored only as a SHA-256 hash, and **rotated on every use**. Presenting a token
+that was already used (outside a 10-second grace window for two tabs refreshing at once) revokes the whole
+session, since that means the token was copied. Signing out, changing the password (other sessions) and
+deactivating an account revoke sessions on the server. The access token itself can't be revoked, which is
+why it is short. A role change reaches the access token at the next refresh.
 
 Create the first admin: set `ADMIN_EMAIL` / `ADMIN_PASSWORD` in `.env`, then
 `pnpm run create-admin`.

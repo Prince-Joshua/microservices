@@ -1,4 +1,6 @@
-import { getToken } from "../lib/storage";
+import { config } from "../config";
+import { getRefreshToken, getToken, isExpired, loadAuth, saveAuth } from "../lib/storage";
+import type { User } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -24,6 +26,66 @@ export class ApiError extends Error {
 }
 
 export const UNAUTHORIZED_EVENT = "auth:unauthorized";
+/** Fired after a silent refresh, with the up-to-date user as `detail`. */
+export const SESSION_REFRESHED_EVENT = "auth:refreshed";
+
+const SESSION_UNAVAILABLE = "Couldn't refresh your session. Check your connection and try again.";
+
+type RefreshOutcome = "ok" | "invalid" | "unavailable";
+
+let refreshInFlight: Promise<RefreshOutcome> | null = null;
+
+/**
+ * Swap the refresh token for a new pair. Everything that needs a refresh at
+ * the same moment shares one call: refresh tokens are single-use, so two
+ * parallel calls would fight over the same token.
+ */
+function refreshSession(): Promise<RefreshOutcome> {
+  refreshInFlight ??= doRefresh().finally(() => {
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
+}
+
+async function doRefresh(): Promise<RefreshOutcome> {
+  const sent = getRefreshToken();
+  if (!sent) return "invalid";
+
+  let response: Response;
+  try {
+    response = await fetch(`${config.usersUrl}/auth/refresh`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ refreshToken: sent }),
+    });
+  } catch {
+    return "unavailable"; // offline or the server is waking up: the session itself is fine
+  }
+
+  if (response.ok) {
+    try {
+      const data = (await response.json()) as { token: string; refreshToken: string; user: User };
+      saveAuth({ token: data.token, refreshToken: data.refreshToken, user: data.user });
+      window.dispatchEvent(new CustomEvent(SESSION_REFRESHED_EVENT, { detail: data.user }));
+      return "ok";
+    } catch {
+      return "unavailable";
+    }
+  }
+
+  if (response.status === 401) {
+    // Another tab may have refreshed first and stored a newer token: that is a success, not a sign-out.
+    const latest = getRefreshToken();
+    return latest && latest !== sent ? "ok" : "invalid";
+  }
+
+  return "unavailable"; // 5xx, 429 and so on: try again later, don't sign anyone out
+}
+
+function sessionEnded(): ApiError {
+  window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  return new ApiError(401, "Your session has expired. Please sign in again.");
+}
 
 type Query = Record<string, string | number | boolean | undefined | null>;
 
@@ -54,8 +116,8 @@ function buildUrl(base: string, path: string, query?: Query): string {
   return `${base}${path}${qs ? `?${qs}` : ""}`;
 }
 
-/** Like `request`, but also hands back the status code (POST /orders uses 200/201/202 differently). */
-export async function requestRaw<T>(
+/** One HTTP call with whatever token is stored right now. No refresh logic here. */
+async function attempt<T>(
   base: string,
   path: string,
   { method = "GET", body, query, headers = {}, signal, auth = true }: RequestOptions = {}
@@ -94,10 +156,6 @@ export async function requestRaw<T>(
       `Request failed (${response.status})`;
     const retry = Number(response.headers.get("Retry-After"));
 
-    if (response.status === 401 && auth && token) {
-      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
-    }
-
     throw new ApiError(
       response.status,
       message,
@@ -108,6 +166,58 @@ export async function requestRaw<T>(
   }
 
   return { status: response.status, data: data as T, headers: response.headers };
+}
+
+/**
+ * Like `request`, but also hands back the status code (POST /orders uses 200/201/202 differently).
+ *
+ * Keeps people signed in: an expired access token is replaced with the refresh
+ * token, and the call is repeated once. Only a refresh the server refuses signs
+ * the person out; a network failure or a sleeping server never does.
+ */
+export async function requestRaw<T>(
+  base: string,
+  path: string,
+  options: RequestOptions = {}
+): Promise<RawResponse<T>> {
+  const auth = options.auth ?? true;
+
+  if (!auth) return attempt<T>(base, path, options);
+
+  // Skip a doomed round trip when we already know the access token has expired.
+  const stored = loadAuth();
+  if (stored?.refreshToken && isExpired(stored.token)) {
+    const outcome = await refreshSession();
+    if (outcome === "unavailable") throw new ApiError(0, SESSION_UNAVAILABLE);
+    if (outcome === "invalid") throw sessionEnded();
+  }
+
+  const sentToken = getToken();
+
+  try {
+    return await attempt<T>(base, path, options);
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 401 || !sentToken) throw error;
+
+    // Signed in but refused: the token expired, or this account was deactivated.
+    const now = getToken();
+    if (now && now !== sentToken) {
+      // Another request or tab already refreshed: just repeat with the new token.
+    } else {
+      if (!getRefreshToken()) throw sessionEnded();
+
+      const outcome = await refreshSession();
+      if (outcome === "unavailable") throw new ApiError(0, SESSION_UNAVAILABLE);
+      if (outcome === "invalid") throw sessionEnded();
+    }
+
+    try {
+      return await attempt<T>(base, path, options);
+    } catch (retryError) {
+      if (retryError instanceof ApiError && retryError.status === 401) throw sessionEnded();
+      throw retryError;
+    }
+  }
 }
 
 export async function request<T>(base: string, path: string, options?: RequestOptions): Promise<T> {
