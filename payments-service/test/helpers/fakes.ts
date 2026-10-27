@@ -15,6 +15,10 @@ type Where = Record<string, unknown>;
 
 function matches(row: Record<string, unknown>, where: Where = {}): boolean {
   return Object.entries(where).every(([key, expected]) => {
+    if (key === "OR") {
+      return (expected as Where[]).some((branch) => matches(row, branch));
+    }
+
     if (expected && typeof expected === "object" && !(expected instanceof Date)) {
       const condition = expected as { lt?: unknown; in?: unknown[]; not?: unknown };
 
@@ -63,6 +67,7 @@ export class FakePrisma {
           refundReason: null,
           refundAttempts: 0,
           refundedAt: null,
+          refundClaimedUntil: null,
           createdAt: now,
           updatedAt: now,
           ...data,

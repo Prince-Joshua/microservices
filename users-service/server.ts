@@ -1,5 +1,11 @@
 import "dotenv/config";
 import express from "express";
+
+import {
+  installOutboundTracing,
+  installStructuredLogging,
+  requestContext,
+} from "./middleware/observability.js";
 import mongoose from "mongoose";
 
 import { connectDatabase } from "./config/database.js";
@@ -9,7 +15,18 @@ import authRoutes from "./routes/auth.routes.js";
 import usersRoutes from "./routes/users.routes.js";
 import internalRoutes from "./routes/internal.routes.js";
 
+// JSON logs, request ids on every log line and on calls to the other services.
+installStructuredLogging("users");
+installOutboundTracing([
+  process.env.USERS_SERVICE_URL,
+  process.env.PRODUCTS_SERVICE_URL,
+  process.env.ORDERS_SERVICE_URL,
+  process.env.PAYMENTS_SERVICE_URL,
+]);
+
 const app = express();
+
+app.use(requestContext());
 
 app.use(express.json({ limit: "100kb" }));
 

@@ -1,3 +1,4 @@
+import { newJobId, runWithRequestId } from "../middleware/observability.js";
 import { prisma } from "../config/prisma.js";
 import {
   checkPayment,
@@ -130,7 +131,9 @@ export function startPaymentWorker({
     running = true;
 
     try {
-      const stats = await runPaymentWorker({ minAgeMs, abandonMs });
+      const stats = await runWithRequestId(newJobId("payment-worker"), () =>
+        runPaymentWorker({ minAgeMs, abandonMs })
+      );
 
       if (stats.checked || stats.notified || stats.refunded || stats.errors) {
         console.log("Payment worker:", stats);

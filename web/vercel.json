@@ -1,0 +1,73 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "installCommand": "pnpm install",
+  "buildCommand": "pnpm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/api/users/auth",
+      "destination": "https://shopfront-users.onrender.com/auth"
+    },
+    {
+      "source": "/api/users/auth/:path*",
+      "destination": "https://shopfront-users.onrender.com/auth/:path*"
+    },
+    {
+      "source": "/api/users/users",
+      "destination": "https://shopfront-users.onrender.com/users"
+    },
+    {
+      "source": "/api/users/users/:path*",
+      "destination": "https://shopfront-users.onrender.com/users/:path*"
+    },
+    {
+      "source": "/api/products/products",
+      "destination": "https://shopfront-products.onrender.com/products"
+    },
+    {
+      "source": "/api/products/products/:path*",
+      "destination": "https://shopfront-products.onrender.com/products/:path*"
+    },
+    {
+      "source": "/api/orders/orders",
+      "destination": "https://shopfront-orders.onrender.com/orders"
+    },
+    {
+      "source": "/api/orders/orders/:path*",
+      "destination": "https://shopfront-orders.onrender.com/orders/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/assets/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        }
+      ]
+    }
+  ]
+}

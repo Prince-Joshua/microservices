@@ -40,6 +40,9 @@ model Payment {
   refundReason   String?
   refundAttempts Int         @default(0)
   refundedAt     DateTime?   @db.Timestamptz(6)
+  // Lease: whoever is currently calling Paystack to refund holds this until it
+  // expires, so two instances (or the worker and a request) never refund at once.
+  refundClaimedUntil DateTime? @db.Timestamptz(6)
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(6)

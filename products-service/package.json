@@ -10,7 +10,13 @@
     "build": "pnpm run clean && tsc -p tsconfig.build.json",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "dev": "tsx watch server.ts",
+    "dev:catalog": "tsx watch servers/catalog.ts",
+    "dev:inventory": "tsx watch servers/inventory.ts",
+    "dev:reconciler": "tsx watch servers/reconciler.ts",
     "start": "node dist/server.js",
+    "start:catalog": "node dist/servers/catalog.js",
+    "start:inventory": "node dist/servers/inventory.js",
+    "start:reconciler": "node dist/servers/reconciler.js",
     "typecheck": "tsc --noEmit",
     "test": "pnpm run clean && tsc && node --test --experimental-test-module-mocks \"dist/test/*.test.js\"",
     "seed": "tsx scripts/seed.ts"

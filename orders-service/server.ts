@@ -1,6 +1,12 @@
 import "dotenv/config";
 import express from "express";
 
+import {
+  installOutboundTracing,
+  installStructuredLogging,
+  requestContext,
+} from "./middleware/observability.js";
+
 import { prisma } from "./config/prisma.js";
 import { authenticate } from "./middleware/auth.js";
 import { internalAuth } from "./middleware/internal-auth.js";
@@ -8,7 +14,18 @@ import orderRoutes from "./routes/order.routes.js";
 import internalRoutes from "./routes/internal.routes.js";
 import { startSagaRecovery } from "./jobs/saga-recovery.js";
 
+// JSON logs, request ids on every log line and on calls to the other services.
+installStructuredLogging("orders");
+installOutboundTracing([
+  process.env.USERS_SERVICE_URL,
+  process.env.PRODUCTS_SERVICE_URL,
+  process.env.ORDERS_SERVICE_URL,
+  process.env.PAYMENTS_SERVICE_URL,
+]);
+
 const app = express();
+
+app.use(requestContext());
 
 app.use(express.json({ limit: "100kb" }));
 

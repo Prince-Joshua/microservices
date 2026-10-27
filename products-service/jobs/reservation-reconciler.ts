@@ -1,3 +1,4 @@
+import { newJobId, runWithRequestId } from "../middleware/observability.js";
 import { Product } from "../models/product.model.js";
 import { getReservationStatus } from "../clients/orders.client.js";
 import {
@@ -121,7 +122,9 @@ export function startReservationReconciler({
     running = true;
 
     try {
-      const stats = await reconcileReservations({ olderThanMs });
+      const stats = await runWithRequestId(newJobId("reservation-reconciler"), () =>
+        reconcileReservations({ olderThanMs })
+      );
 
       if (stats.finalized || stats.released || stats.errors) {
         console.log("Reservation reconciler:", stats);

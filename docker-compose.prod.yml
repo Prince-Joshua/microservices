@@ -1,0 +1,165 @@
+# Production-style stack: only the gateway (nginx + the built React app) is
+# published. Services and databases live on the private compose network.
+#
+#   cp .env.example .env            # fill in secrets
+#   # first time (and after upgrades that add migrations): create the Postgres tables
+#   docker compose -f docker-compose.prod.yml build
+#   docker compose -f docker-compose.prod.yml up -d orders-postgres payments-postgres
+#   docker compose -f docker-compose.prod.yml run --rm --no-deps orders   pnpm exec prisma migrate deploy
+#   docker compose -f docker-compose.prod.yml run --rm --no-deps payments pnpm exec prisma migrate deploy
+#   # then start everything (REPLICAS=3 in .env for three copies of each service)
+#   docker compose -f docker-compose.prod.yml up -d
+# REPLICAS (default 2) copies of each service run behind nginx. This is safe because
+# every state change is a conditional update, background jobs may run on every copy,
+# and refunds take a lease (see payments-service processRefund).
+x-service: &service
+  restart: unless-stopped
+  stop_grace_period: 20s
+  deploy:
+    replicas: ${REPLICAS:-2}
+  environment: &common-env
+    NODE_ENV: production
+    JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+    INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
+
+services:
+  gateway:
+    build:
+      context: ./web
+      args:
+        VITE_CURRENCY: ${PAYMENT_CURRENCY:-NGN}
+    ports:
+      - "80:80"
+    depends_on:
+      users: { condition: service_healthy }
+      products: { condition: service_healthy }
+      orders: { condition: service_healthy }
+      payments: { condition: service_healthy }
+    restart: unless-stopped
+
+  users:
+    <<: *service
+    build: { context: ./users-service, dockerfile: Dockerfile }
+    environment:
+      <<: *common-env
+      PORT: 4001
+      MONGO_URL: mongodb://users-mongo:27017/users
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1h}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4001/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      users-mongo: { condition: service_healthy }
+
+  products:
+    <<: *service
+    build: { context: ./products-service, dockerfile: Dockerfile }
+    environment:
+      <<: *common-env
+      PORT: 4002
+      MONGO_URL: mongodb://products-mongo:27017/products
+      ORDERS_SERVICE_URL: http://orders:4000
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4002/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      products-mongo: { condition: service_healthy }
+
+  orders:
+    <<: *service
+    build: { context: ./orders-service, dockerfile: Dockerfile }
+    environment:
+      <<: *common-env
+      PORT: 4000
+      POSTGRES_URL: postgresql://orders:${ORDERS_DB_PASSWORD:?set ORDERS_DB_PASSWORD}@orders-postgres:5432/orders
+      USERS_SERVICE_URL: http://users:4001
+      PRODUCTS_SERVICE_URL: http://products:4002
+      PAYMENTS_SERVICE_URL: http://payments:4003
+      PAYMENT_CURRENCY: ${PAYMENT_CURRENCY:-NGN}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      orders-postgres: { condition: service_healthy }
+
+  payments:
+    <<: *service
+    build: { context: ./payments-service, dockerfile: Dockerfile }
+    environment:
+      <<: *common-env
+      PORT: 4003
+      POSTGRES_URL: postgresql://payments:${PAYMENTS_DB_PASSWORD:?set PAYMENTS_DB_PASSWORD}@payments-postgres:5432/payments
+      ORDERS_SERVICE_URL: http://orders:4000
+      PAYSTACK_SECRET_KEY: ${PAYSTACK_SECRET_KEY:?set PAYSTACK_SECRET_KEY}
+      PAYMENT_CALLBACK_URL: ${PUBLIC_URL:-http://localhost}/payment/callback
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4003/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      payments-postgres: { condition: service_healthy }
+
+  users-mongo:
+    image: mongo:8
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    volumes: [users-mongo-data:/data/db]
+
+  products-mongo:
+    image: mongo:8
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    volumes: [products-mongo-data:/data/db]
+
+  orders-postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: orders
+      POSTGRES_PASSWORD: ${ORDERS_DB_PASSWORD}
+      POSTGRES_DB: orders
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orders -d orders"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    volumes: [orders-postgres-data:/var/lib/postgresql/data]
+
+  payments-postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: payments
+      POSTGRES_PASSWORD: ${PAYMENTS_DB_PASSWORD}
+      POSTGRES_DB: payments
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payments -d payments"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    volumes: [payments-postgres-data:/var/lib/postgresql/data]
+
+volumes:
+  users-mongo-data:
+  products-mongo-data:
+  orders-postgres-data:
+  payments-postgres-data:

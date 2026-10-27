@@ -319,6 +319,9 @@ export async function notifyOrder(payment: Payment): Promise<Payment> {
   return processRefund(await reload(payment.id));
 }
 
+// How long one caller may hold a refund before another may take over (crash safety).
+const REFUND_LEASE_MS = 60 * 1000;
+
 /**
  * Send owed money back to the customer. Safe to repeat: before creating a
  * refund it checks whether Paystack already has one for this transaction,
@@ -329,12 +332,31 @@ export async function processRefund(payment: Payment): Promise<Payment> {
     return payment;
   }
 
+  // Take a lease before touching Paystack. "Check Paystack, then refund" is not
+  // atomic, so with several instances (or the worker racing a request) two
+  // callers could both pass the check and refund twice. The update below
+  // succeeds for exactly one of them: it only matches if nobody else changed
+  // the attempt counter and no unexpired lease exists.
   const attempts = payment.refundAttempts + 1;
+  const now = new Date();
 
-  await prisma.payment.updateMany({
-    where: { id: payment.id },
-    data: { refundAttempts: attempts },
+  const claim = await prisma.payment.updateMany({
+    where: {
+      id: payment.id,
+      refundState: "OWED",
+      refundAttempts: payment.refundAttempts,
+      OR: [{ refundClaimedUntil: null }, { refundClaimedUntil: { lt: now } }],
+    },
+    data: {
+      refundAttempts: attempts,
+      refundClaimedUntil: new Date(now.getTime() + REFUND_LEASE_MS),
+    },
   });
+
+  if (claim.count === 0) {
+    // Someone else is refunding this payment right now; let them finish.
+    return reload(payment.id);
+  }
 
   try {
     const existing = payment.paystackId
@@ -350,7 +372,7 @@ export async function processRefund(payment: Payment): Promise<Payment> {
 
     await prisma.payment.updateMany({
       where: { id: payment.id, refundState: "OWED" },
-      data: { refundState: "DONE", refundedAt: new Date() },
+      data: { refundState: "DONE", refundedAt: new Date(), refundClaimedUntil: null },
     });
   } catch (error) {
     console.error("Refund attempt failed:", {
@@ -367,7 +389,13 @@ export async function processRefund(payment: Payment): Promise<Payment> {
 
       await prisma.payment.updateMany({
         where: { id: payment.id, refundState: "OWED" },
-        data: { refundState: "FAILED" },
+        data: { refundState: "FAILED", refundClaimedUntil: null },
+      });
+    } else {
+      // Release the lease so the next worker pass may retry.
+      await prisma.payment.updateMany({
+        where: { id: payment.id, refundState: "OWED" },
+        data: { refundClaimedUntil: null },
       });
     }
   }

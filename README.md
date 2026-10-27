@@ -301,3 +301,39 @@ Partial refunds, multiple currencies in one deployment, receipts or emails,
 and a Paystack webhook source-IP allowlist (the signature check is the
 authentication; allowlisting the IPs Paystack publishes is cheap to add at your
 proxy or firewall).
+
+## Web app
+
+`web/` is a React + TypeScript + Chakra UI storefront and admin console for these services.
+See [`web/README.md`](web/README.md). Quick start: `pnpm run install:web && pnpm run web:dev` (http://localhost:3000).
+
+## Deploying
+
+`docker-compose.prod.yml` runs everything behind one nginx entry point (React app + `/api/*` routing, internal routes blocked). See [`deploy/README.md`](deploy/README.md).
+
+`docker-compose.prod.yml` runs replicas of every service with health checks; every request carries an id you can follow across services with `deploy/trace.sh <id>`. The next step (events through a broker) is planned in [`deploy/EVENTS-PLAN.md`](deploy/EVENTS-PLAN.md).
+
+## Deploying on free tiers (Render + Vercel + Supabase + Atlas)
+
+`render.yaml` deploys the four services as **free Render web services**; `web/vercel.json` deploys the web app on
+Vercel and forwards an allow-list of API paths to them. Databases are **MongoDB Atlas** (users, products) and
+**Supabase Postgres** (orders, payments, one free project each; not Render Postgres). Step by step:
+[`deploy/RENDER-VERCEL.md`](deploy/RENDER-VERCEL.md).
+
+What the free tier means in practice:
+
+- **Cold starts.** Free Render services sleep after 15 idle minutes and take up to a minute to wake, so the first
+  request after a quiet spell is slow and a checkout that touches several services can take minutes. Inter-service
+  timeouts are raised to 60 s, retrying a checkout is safe, and `deploy/warm-up.sh` wakes everything before a demo.
+- **750 free instance hours a month, shared by all four services.** Don't keep them awake with pingers; nonstop they
+  would be suspended after about a week.
+- **No private network and no gateway.** Free web services can't receive private traffic, so all services are public and
+  call each other over public URLs. `/internal/*` is protected only by the internal token (blocked through Vercel by the
+  allow-list, not on the Render URLs themselves), and there is no login rate limit.
+- **Workers only run while awake.** Saga recovery, the payment worker and the stock reconciler pause while a service sleeps.
+- **Supabase pauses free projects after about a week of low activity**; resume it in the dashboard. Use the *session
+  pooler* connection string (the direct one is IPv6-only on free).
+- **Migrations and the first admin run from your computer**, not on Render.
+
+The production design (public Nginx gateway, private services, always-on instances) is
+[`deploy/render/render.paid.yaml`](deploy/render/render.paid.yaml).

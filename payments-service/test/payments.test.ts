@@ -10,6 +10,7 @@ const {
   verifyAndSettle,
   verifyOrderPayment,
   requestRefund,
+  processRefund,
 } = await import("../services/payments.js");
 const { runPaymentWorker } = await import("../jobs/payment-worker.js");
 const { PaymentError } = await import("../errors.js");
@@ -341,4 +342,20 @@ test("worker: re-checks old pending payments, leaves fresh ones, abandons very o
   assert.equal(prisma.get(paid.payment.reference).status, "SUCCESS");
   assert.equal(prisma.get(open.payment.reference).status, "PENDING");
   assert.equal(prisma.get(ancient.payment.reference).status, "FAILED");
+});
+
+test("two instances refunding the same payment at once: Paystack is asked exactly once", async () => {
+  const { payment } = await initiatePayment(order());
+  paystack.pay(payment.reference);
+  orders.answer = { accepted: false, reason: "ORDER_CANCELLED" };
+  paystack.failRefund = true;
+  await quiet(() => verifyAndSettle(payment.reference)); // leaves the refund OWED
+  paystack.failRefund = false;
+
+  // Both callers read the same row, as two replicas would.
+  const snapshot = { ...prisma.get(payment.reference) };
+  await Promise.all([processRefund({ ...snapshot }), processRefund({ ...snapshot })]);
+
+  assert.equal(paystack.refunds.length, 1, "one refund, not two");
+  assert.equal(prisma.get(payment.reference).refundState, "DONE");
 });

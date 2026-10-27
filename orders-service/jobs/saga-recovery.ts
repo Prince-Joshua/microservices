@@ -1,3 +1,4 @@
+import { newJobId, runWithRequestId } from "../middleware/observability.js";
 import { prisma } from "../config/prisma.js";
 import {
   driveCreateSaga,
@@ -110,7 +111,9 @@ export function startSagaRecovery({
     running = true;
 
     try {
-      const stats = await recoverSagas({ staleMs });
+      const stats = await runWithRequestId(newJobId("saga-recovery"), () =>
+        recoverSagas({ staleMs })
+      );
 
       if (stats.driven || stats.compensated || stats.expired || stats.errors) {
         console.log("Saga recovery:", stats);

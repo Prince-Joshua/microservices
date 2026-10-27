@@ -1,13 +1,9 @@
 import { OrderError } from "../errors.js";
 import { request } from "./http.js";
 
-const url = (path: string): string => `${process.env.PAYMENTS_SERVICE_URL}/internal${path}`;
+const url = (path: string): string =>
+  `${process.env.PAYMENTS_SERVICE_URL}/internal${path}`;
 
-/**
- * Start (or resume) the payment for an order. Idempotent per order.
- * Returns { status: "PENDING" | "SUCCESS", payment: { reference,
- * authorizationUrl, accessCode, amount, currency } }.
- */
 export interface PaymentSession {
   status: "PENDING" | "SUCCESS" | (string & {});
   payment: {
@@ -33,11 +29,10 @@ export async function initializePayment({
   amount: number;
   currency: string;
 }): Promise<PaymentSession> {
-  const { status, data } = await request(
-    "Payments service",
-    url("/payments"),
-    { method: "POST", body: { orderId, userId, email, amount, currency } }
-  );
+  const { status, data } = await request("Payments service", url("/payments"), {
+    method: "POST",
+    body: { orderId, userId, email, amount, currency },
+  });
 
   if (
     status === 200 &&
@@ -61,12 +56,12 @@ export async function initializePayment({
  */
 export async function requestRefund(
   orderId: string,
-  reason?: string
+  reason?: string,
 ): Promise<string> {
   const { status, data } = await request(
     "Payments service",
     url("/payments/refund"),
-    { method: "POST", body: { orderId, reason } }
+    { method: "POST", body: { orderId, reason } },
   );
 
   if (status === 200 && typeof data?.state === "string") {
@@ -74,7 +69,7 @@ export async function requestRefund(
       // Paystack refused repeatedly; retrying from here won't help.
       console.error(
         "CRITICAL: refund failed and needs manual handling for order",
-        orderId
+        orderId,
       );
     }
 
@@ -84,18 +79,13 @@ export async function requestRefund(
   throw new Error(`Refund request failed with status ${status}`);
 }
 
-/**
- * Ask Payments to re-check the order's payments with Paystack right now
- * ("I just paid"). Payments tells Orders the result through the normal
- * callback. Returns { status: "NONE" | "PENDING" | "SUCCESS" | "FAILED" }.
- */
 export async function verifyPayment(
-  orderId: string
+  orderId: string,
 ): Promise<{ status: string }> {
   const { status, data } = await request(
     "Payments service",
     url("/payments/verify"),
-    { method: "POST", body: { orderId } }
+    { method: "POST", body: { orderId } },
   );
 
   if (status === 200 && typeof data?.status === "string") {

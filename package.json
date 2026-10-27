@@ -4,7 +4,10 @@
   "packageManager": "pnpm@10.28.0",
   "scripts": {
     "install:all": "pnpm -C users-service install && pnpm -C products-service install && pnpm -C orders-service install && pnpm -C payments-service install",
-    "typecheck": "pnpm -C users-service typecheck && pnpm -C products-service typecheck && pnpm -C orders-service typecheck && pnpm -C payments-service typecheck",
-    "test": "pnpm -C users-service test && pnpm -C products-service test && pnpm -C orders-service test && pnpm -C payments-service test"
+    "typecheck": "pnpm -C users-service typecheck && pnpm -C products-service typecheck && pnpm -C orders-service typecheck && pnpm -C payments-service typecheck && pnpm -C web typecheck",
+    "test": "pnpm -C users-service test && pnpm -C products-service test && pnpm -C orders-service test && pnpm -C payments-service test",
+    "install:web": "pnpm -C web install",
+    "web:dev": "pnpm -C web dev",
+    "web:build": "pnpm -C web build"
   }
 }
