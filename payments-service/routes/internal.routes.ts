@@ -24,12 +24,6 @@ function handleError(res: Response, error: unknown, what: string) {
   return res.status(500).json({ message: `Unable to ${what}` });
 }
 
-/**
- * POST /internal/payments
- * { orderId, userId, email, amount (minor units), currency }
- * -> { status: "PENDING" | "SUCCESS", payment: { reference, authorizationUrl, ... } }
- * Idempotent per order: calling again returns the same checkout session.
- */
 router.post("/payments", async (req, res) => {
   const { orderId, userId, email, amount, currency } = req.body ?? {};
 
@@ -40,8 +34,6 @@ router.post("/payments", async (req, res) => {
     !EMAIL_PATTERN.test(email) ||
     typeof amount !== "number" ||
     !Number.isSafeInteger(amount) ||
-    // Paystack's minimum is one major unit's worth of subunits at best;
-    // reject only what can never be valid and let Paystack enforce the rest.
     amount < 1 ||
     typeof currency !== "string" ||
     !/^[A-Z]{3}$/.test(currency)
@@ -54,17 +46,13 @@ router.post("/payments", async (req, res) => {
 
   try {
     return res.json(
-      await initiatePayment({ orderId, userId, email, amount, currency })
+      await initiatePayment({ orderId, userId, email, amount, currency }),
     );
   } catch (error) {
     return handleError(res, error, "start payment");
   }
 });
 
-/**
- * POST /internal/payments/refund  { orderId, reason? }
- * -> { state: "NOT_PAID" | "DONE" | "QUEUED" | "FAILED" }. Idempotent.
- */
 router.post("/payments/refund", async (req, res) => {
   const { orderId, reason } = req.body ?? {};
 
@@ -76,19 +64,14 @@ router.post("/payments/refund", async (req, res) => {
     return res.json(
       await requestRefund(
         orderId,
-        typeof reason === "string" ? reason.slice(0, 200) : undefined
-      )
+        typeof reason === "string" ? reason.slice(0, 200) : undefined,
+      ),
     );
   } catch (error) {
     return handleError(res, error, "refund payment");
   }
 });
 
-/**
- * POST /internal/payments/verify  { orderId }
- * Re-checks the order's open payments with Paystack right now.
- * -> { status: "NONE" | "PENDING" | "SUCCESS" | "FAILED" }
- */
 router.post("/payments/verify", async (req, res) => {
   const { orderId } = req.body ?? {};
 
@@ -99,7 +82,6 @@ router.post("/payments/verify", async (req, res) => {
   try {
     return res.json(await verifyOrderPayment(orderId));
   } catch (error) {
-    // Paystack couldn't be asked: not an answer about the payment.
     console.error("Payment verification failed:", error);
     return res.status(503).json({ message: "Payment provider is unavailable" });
   }

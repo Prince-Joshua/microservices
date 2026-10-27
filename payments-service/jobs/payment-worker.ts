@@ -11,15 +11,6 @@ const DEFAULT_MIN_AGE_MS = 60 * 1000;
 const DEFAULT_ABANDON_MS = 24 * 60 * 60 * 1000;
 const BATCH_SIZE = 50;
 
-/**
- * One pass of everything a missed webhook, a crash or an outage can leave
- * behind:
- *
- *   - PENDING payments not looked at for `minAgeMs`: ask Paystack. Success
- *     is settled; payments still unpaid after `abandonMs` become FAILED.
- *   - SUCCESS payments Orders hasn't acknowledged: tell Orders again.
- *   - Refunds still owed: try again.
- */
 export interface WorkerOptions {
   intervalMs?: number;
   minAgeMs?: number;
@@ -37,7 +28,12 @@ export async function runPaymentWorker({
   minAgeMs = DEFAULT_MIN_AGE_MS,
   abandonMs = DEFAULT_ABANDON_MS,
 }: WorkerOptions = {}): Promise<WorkerStats> {
-  const stats: WorkerStats = { checked: 0, notified: 0, refunded: 0, errors: 0 };
+  const stats: WorkerStats = {
+    checked: 0,
+    notified: 0,
+    refunded: 0,
+    errors: 0,
+  };
   const now = Date.now();
 
   const pending = await prisma.payment.findMany({
@@ -112,10 +108,7 @@ export async function runPaymentWorker({
   return stats;
 }
 
-/**
- * Runs the worker on an interval, never overlapping itself.
- * Returns a function that stops it.
- */
+
 export function startPaymentWorker({
   intervalMs = DEFAULT_INTERVAL_MS,
   minAgeMs = DEFAULT_MIN_AGE_MS,
@@ -132,7 +125,7 @@ export function startPaymentWorker({
 
     try {
       const stats = await runWithRequestId(newJobId("payment-worker"), () =>
-        runPaymentWorker({ minAgeMs, abandonMs })
+        runPaymentWorker({ minAgeMs, abandonMs }),
       );
 
       if (stats.checked || stats.notified || stats.refunded || stats.errors) {
@@ -146,7 +139,7 @@ export function startPaymentWorker({
   };
 
   const timer = setInterval(tick, intervalMs);
-  timer.unref(); // don't keep the process alive just for this
+  timer.unref();
 
   return () => clearInterval(timer);
 }

@@ -1,14 +1,10 @@
 import { PaystackError } from "../errors.js";
 
-/**
- * Thin wrapper over the Paystack REST API. Amounts are always in the
- * currency's minor unit (kobo for NGN).
- *
- * Failures throw PaystackError. `transient` marks outcomes that are
- * unknown or worth retrying (network error, timeout, 5xx, 429); callers
- * must never treat a transient error as a definite answer.
- */
-async function call(method: string, path: string, body?: unknown): Promise<any> {
+async function call(
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<any> {
   const secret = process.env.PAYSTACK_SECRET_KEY;
 
   if (!secret) {
@@ -30,9 +26,12 @@ async function call(method: string, path: string, body?: unknown): Promise<any> 
       signal: AbortSignal.timeout(Number(process.env.HTTP_TIMEOUT_MS) || 8000),
     });
   } catch (cause) {
-    throw new PaystackError(`Paystack unreachable: ${cause instanceof Error ? cause.message : String(cause)}`, {
-      transient: true,
-    });
+    throw new PaystackError(
+      `Paystack unreachable: ${cause instanceof Error ? cause.message : String(cause)}`,
+      {
+        transient: true,
+      },
+    );
   }
 
   let json = null as {
@@ -59,7 +58,7 @@ async function call(method: string, path: string, body?: unknown): Promise<any> 
       typeof json?.message === "string"
         ? json.message
         : `Paystack returned ${response.status}`,
-      { httpStatus: response.status }
+      { httpStatus: response.status },
     );
   }
 
@@ -127,11 +126,11 @@ export interface PaystackTransaction {
 }
 
 export async function verifyTransaction(
-  reference: string
+  reference: string,
 ): Promise<PaystackTransaction> {
   const data = await call(
     "GET",
-    `/transaction/verify/${encodeURIComponent(reference)}`
+    `/transaction/verify/${encodeURIComponent(reference)}`,
   );
 
   if (typeof data?.status !== "string") {
@@ -160,11 +159,11 @@ export async function createRefund({
 
 /** Existing refunds for a transaction, by its numeric Paystack id. */
 export async function listRefunds(
-  transactionId: string | number
+  transactionId: string | number,
 ): Promise<{ status: string }[]> {
   const data = await call(
     "GET",
-    `/refund?transaction=${encodeURIComponent(transactionId)}`
+    `/refund?transaction=${encodeURIComponent(transactionId)}`,
   );
 
   return Array.isArray(data) ? data : [];

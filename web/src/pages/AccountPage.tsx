@@ -1,6 +1,15 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { Badge, Button, Card, Field, HStack, Input, Stack, Text } from "@chakra-ui/react";
+import {
+  Badge,
+  Button,
+  Card,
+  Field,
+  HStack,
+  Input,
+  Stack,
+  Text,
+} from "@chakra-ui/react";
 import { usersApi } from "../api/users";
 import { useAuth } from "../context/AuthContext";
 import { PageHeader } from "../components/PageHeader";
@@ -39,7 +48,10 @@ export function AccountPage() {
   const savePassword = async (e: FormEvent) => {
     e.preventDefault();
     if (newPassword.length < 8 || newPassword.length > 128) {
-      notifyError("Invalid password", new Error("New password must be 8–128 characters"));
+      notifyError(
+        "Invalid password",
+        new Error("New password must be 8–128 characters"),
+      );
       return;
     }
     setSavingPassword(true);
@@ -79,7 +91,9 @@ export function AccountPage() {
             <Card.Title>Profile</Card.Title>
             <Card.Description>
               {user.email}{" "}
-              <Badge colorPalette={user.role === "admin" ? "purple" : "gray"}>{user.role}</Badge>
+              <Badge colorPalette={user.role === "admin" ? "purple" : "gray"}>
+                {user.role}
+              </Badge>
             </Card.Description>
           </Card.Header>
           <Card.Body>
@@ -87,10 +101,19 @@ export function AccountPage() {
               <Stack gap="4">
                 <Field.Root required>
                   <Field.Label>Name</Field.Label>
-                  <Input maxLength={100} value={name} onChange={(e) => setName(e.target.value)} />
+                  <Input
+                    maxLength={100}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                  />
                 </Field.Root>
                 <HStack>
-                  <Button type="submit" colorPalette="brand" loading={savingName} disabled={!name.trim() || name.trim() === user.name}>
+                  <Button
+                    type="submit"
+                    colorPalette="brand"
+                    loading={savingName}
+                    disabled={!name.trim() || name.trim() === user.name}
+                  >
                     Save
                   </Button>
                 </HStack>
@@ -108,15 +131,29 @@ export function AccountPage() {
               <Stack gap="4">
                 <Field.Root required>
                   <Field.Label>Current password</Field.Label>
-                  <Input type="password" autoComplete="current-password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
+                  <Input
+                    type="password"
+                    autoComplete="current-password"
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                  />
                 </Field.Root>
                 <Field.Root required>
                   <Field.Label>New password</Field.Label>
-                  <Input type="password" autoComplete="new-password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+                  <Input
+                    type="password"
+                    autoComplete="new-password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                  />
                   <Field.HelperText>8–128 characters</Field.HelperText>
                 </Field.Root>
                 <HStack>
-                  <Button type="submit" colorPalette="brand" loading={savingPassword}>
+                  <Button
+                    type="submit"
+                    colorPalette="brand"
+                    loading={savingPassword}
+                  >
                     Update password
                   </Button>
                 </HStack>
@@ -129,18 +166,29 @@ export function AccountPage() {
           <Card.Header>
             <Card.Title>Deactivate account</Card.Title>
             <Card.Description>
-              Your orders are kept, but you won't be able to sign in or place new orders.
+              Your orders are kept, but you won't be able to sign in or place
+              new orders.
             </Card.Description>
           </Card.Header>
           <Card.Footer>
-            <Button variant="outline" colorPalette="red" onClick={() => setConfirmDeactivate(true)}>
+            <Button
+              variant="outline"
+              colorPalette="red"
+              onClick={() => setConfirmDeactivate(true)}
+            >
               Deactivate my account
             </Button>
           </Card.Footer>
         </Card.Root>
-        <Text fontSize="xs" color="fg.muted">
-          Signed in as {user.id}
-        </Text>
+
+        <Stack gap="0.5">
+          <Text fontSize="xs" color="fg.muted">
+            Signed in as {user.email} ({user.role})
+          </Text>
+          <Text fontSize="xs" color="fg.muted">
+            User ID: {user.id}
+          </Text>
+        </Stack>
       </Stack>
 
       <ConfirmDialog
@@ -151,7 +199,8 @@ export function AccountPage() {
         onConfirm={deactivate}
         onCancel={() => setConfirmDeactivate(false)}
       >
-        You'll be signed out immediately. Only an administrator can reactivate the account.
+        You'll be signed out immediately. Only an administrator can reactivate
+        the account.
       </ConfirmDialog>
     </>
   );

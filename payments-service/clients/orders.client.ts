@@ -1,15 +1,4 @@
-/**
- * Tells the Orders service that a payment succeeded.
- *
- * Resolves to { accepted: true } or { accepted: false, reason }. A
- * rejection means "this money doesn't belong to a live order": the order
- * was cancelled or expired, was already paid by another attempt, or the
- * amount was wrong. The caller refunds in that case.
- *
- * Anything unexpected (network error, timeout, non-200, bad body) THROWS,
- * so "couldn't ask" is never mistaken for an answer and the customer is
- * never refunded for an order that was in fact confirmed.
- */
+
 export interface PaymentSucceededInput {
   orderId: string;
   reference: string;

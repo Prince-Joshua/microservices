@@ -2,10 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 
 import type { NextFunction, Request, Response } from "express";
 
-/**
- * Service-to-service authentication. Callers send the shared secret
- * in the x-internal-token header.
- */
+
 export function internalAuth(
   req: Request,
   res: Response,
