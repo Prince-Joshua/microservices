@@ -69,12 +69,19 @@ beforeEach(() => {
   clearSessionCache();
   delete process.env.SESSION_CACHE_MS;
   delete process.env.SESSION_CHECK_TIMEOUT_MS;
+  delete process.env.ADMIN_SESSION_CACHE_MS;
   process.env.USERS_SERVICE_URL = `http://127.0.0.1:${(usersServer.address() as AddressInfo).port}`;
 });
 
 const token = (sid?: string) =>
   jwt.sign({ role: "customer", ...(sid ? { sid } : {}) }, "test-secret", {
     subject: "aaaaaaaaaaaaaaaaaaaaaaaa",
+    algorithm: "HS256",
+  });
+
+const adminToken = (sid?: string) =>
+  jwt.sign({ role: "admin", ...(sid ? { sid } : {}) }, "test-secret", {
+    subject: "bbbbbbbbbbbbbbbbbbbbbbbb",
     algorithm: "HS256",
   });
 
@@ -147,4 +154,48 @@ test("if the users service errors or is unreachable, the token is accepted", asy
   process.env.USERS_SERVICE_URL = `http://127.0.0.1:${await closedPort()}`;
   process.env.SESSION_CHECK_TIMEOUT_MS = "500";
   assert.equal(await isSessionActive("s2"), true);
+});
+
+test("admin tokens fail closed: if the session can't be confirmed, 401", async () => {
+  mode = "error";
+  assert.equal(await listOrders(adminToken("s1")), 401);
+
+  process.env.USERS_SERVICE_URL = `http://127.0.0.1:${await closedPort()}`;
+  process.env.SESSION_CHECK_TIMEOUT_MS = "500";
+  assert.equal(await listOrders(adminToken("s3")), 401);
+});
+
+test("customers still fail open when the users service is down", async () => {
+  mode = "error";
+  assert.equal(await listOrders(token("c1")), 200);
+});
+
+test("a failed check is remembered briefly for admins, and never read as active", async () => {
+  mode = "error";
+
+  assert.equal(await isSessionActive("s1", { strict: true }), false);
+  assert.equal(await isSessionActive("s1", { strict: true }), false);
+  assert.equal(hits, 1);
+  assert.equal(await isSessionActive("s1"), true);
+});
+
+test("admins are re-checked sooner than customers", async () => {
+  process.env.ADMIN_SESSION_CACHE_MS = "10";
+  sessions.set("s1", true);
+
+  assert.equal(await isSessionActive("s1", { strict: true }), true);
+  assert.equal(await isSessionActive("s1", { strict: true }), true);
+  assert.equal(hits, 1);
+
+  sessions.set("s1", false);
+  await sleep(25);
+  assert.equal(await isSessionActive("s1", { strict: true }), false);
+});
+
+test("a confirmed admin answer is still used while the users service is down", async () => {
+  sessions.set("s1", true);
+  assert.equal(await isSessionActive("s1", { strict: true }), true);
+
+  mode = "error";
+  assert.equal(await isSessionActive("s1", { strict: true }), true);
 });

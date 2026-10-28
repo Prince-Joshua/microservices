@@ -1,5 +1,5 @@
 import { config } from "../config";
-import { getRefreshToken, getToken, isExpired, loadAuth, saveAuth } from "../lib/storage";
+import { getToken, isExpired, isSignedIn, setSession } from "../lib/storage";
 import type { User } from "./types";
 
 export class ApiError extends Error {
@@ -29,6 +29,15 @@ export const UNAUTHORIZED_EVENT = "auth:unauthorized";
 /** Fired after a silent refresh, with the up-to-date user as `detail`. */
 export const SESSION_REFRESHED_EVENT = "auth:refreshed";
 
+/**
+ * Sent with the calls that rely on the refresh cookie. A cross-site page can't
+ * add a custom header without a CORS preflight, which the services refuse.
+ */
+export const CSRF_HEADERS: Record<string, string> = { "X-Requested-With": "fetch" };
+
+/** Held while a tab refreshes, so two tabs never spend the same single-use cookie at once. */
+const REFRESH_LOCK = "shop.refresh";
+
 const SESSION_UNAVAILABLE = "Couldn't refresh your session. Check your connection and try again.";
 
 type RefreshOutcome = "ok" | "invalid" | "unavailable";
@@ -36,27 +45,41 @@ type RefreshOutcome = "ok" | "invalid" | "unavailable";
 let refreshInFlight: Promise<RefreshOutcome> | null = null;
 
 /**
- * Swap the refresh token for a new pair. Everything that needs a refresh at
- * the same moment shares one call: refresh tokens are single-use, so two
- * parallel calls would fight over the same token.
+ * Get a new access token with the refresh cookie (the browser attaches it;
+ * the server rotates it). Everything that needs a refresh at the same moment
+ * shares one call, and tabs take turns: refresh tokens are single-use, so two
+ * parallel calls would fight over the same cookie.
  */
-function refreshSession(): Promise<RefreshOutcome> {
-  refreshInFlight ??= doRefresh().finally(() => {
+export function refreshSession(): Promise<RefreshOutcome> {
+  refreshInFlight ??= refreshExclusively().finally(() => {
     refreshInFlight = null;
   });
   return refreshInFlight;
 }
 
-async function doRefresh(): Promise<RefreshOutcome> {
-  const sent = getRefreshToken();
-  if (!sent) return "invalid";
+let boot: Promise<RefreshOutcome> | null = null;
 
+/**
+ * Run once when the app starts: if the browser still holds a valid refresh cookie, this brings the
+ * session back (access token and profile). Requests wait for it, so a signed-in admin never sees the
+ * anonymous version of a page. Resolves "invalid" for a visitor who isn't signed in.
+ */
+export function restoreSession(): Promise<RefreshOutcome> {
+  boot ??= refreshSession().catch((): RefreshOutcome => "unavailable");
+  return boot;
+}
+
+async function refreshExclusively(): Promise<RefreshOutcome> {
+  // Web Locks are in every current browser; without them tabs just don't take turns.
+  return navigator.locks ? await navigator.locks.request(REFRESH_LOCK, doRefresh) : doRefresh();
+}
+
+async function doRefresh(): Promise<RefreshOutcome> {
   let response: Response;
   try {
     response = await fetch(`${config.usersUrl}/auth/refresh`, {
       method: "POST",
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({ refreshToken: sent }),
+      headers: { Accept: "application/json", ...CSRF_HEADERS },
     });
   } catch {
     return "unavailable"; // offline or the server is waking up: the session itself is fine
@@ -64,8 +87,8 @@ async function doRefresh(): Promise<RefreshOutcome> {
 
   if (response.ok) {
     try {
-      const data = (await response.json()) as { token: string; refreshToken: string; user: User };
-      saveAuth({ token: data.token, refreshToken: data.refreshToken, user: data.user });
+      const data = (await response.json()) as { token: string; user: User };
+      setSession(data.token, data.user);
       window.dispatchEvent(new CustomEvent(SESSION_REFRESHED_EVENT, { detail: data.user }));
       return "ok";
     } catch {
@@ -73,11 +96,8 @@ async function doRefresh(): Promise<RefreshOutcome> {
     }
   }
 
-  if (response.status === 401) {
-    // Another tab may have refreshed first and stored a newer token: that is a success, not a sign-out.
-    const latest = getRefreshToken();
-    return latest && latest !== sent ? "ok" : "invalid";
-  }
+  // 401: no cookie, or it is expired, revoked or already used. The session is over.
+  if (response.status === 401) return "invalid";
 
   return "unavailable"; // 5xx, 429 and so on: try again later, don't sign anyone out
 }
@@ -171,8 +191,8 @@ async function attempt<T>(
 /**
  * Like `request`, but also hands back the status code (POST /orders uses 200/201/202 differently).
  *
- * Keeps people signed in: an expired access token is replaced with the refresh
- * token, and the call is repeated once. Only a refresh the server refuses signs
+ * Keeps people signed in: an expired access token is replaced using the refresh
+ * cookie, and the call is repeated once. Only a refresh the server refuses signs
  * the person out; a network failure or a sleeping server never does.
  */
 export async function requestRaw<T>(
@@ -184,9 +204,12 @@ export async function requestRaw<T>(
 
   if (!auth) return attempt<T>(base, path, options);
 
-  // Skip a doomed round trip when we already know the access token has expired.
-  const stored = loadAuth();
-  if (stored?.refreshToken && isExpired(stored.token)) {
+  // A page that just loaded is still finding out whether the cookie holds a session.
+  if (boot) await boot;
+
+  // Signed in, but the access token has expired: get a new one first.
+  const held = getToken();
+  if (isSignedIn() && (!held || isExpired(held))) {
     const outcome = await refreshSession();
     if (outcome === "unavailable") throw new ApiError(0, SESSION_UNAVAILABLE);
     if (outcome === "invalid") throw sessionEnded();
@@ -204,7 +227,7 @@ export async function requestRaw<T>(
     if (now && now !== sentToken) {
       // Another request or tab already refreshed: just repeat with the new token.
     } else {
-      if (!getRefreshToken()) throw sessionEnded();
+      if (!isSignedIn()) throw sessionEnded();
 
       const outcome = await refreshSession();
       if (outcome === "unavailable") throw new ApiError(0, SESSION_UNAVAILABLE);

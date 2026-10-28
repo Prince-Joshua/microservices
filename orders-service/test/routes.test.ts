@@ -303,7 +303,9 @@ test("unknown or inactive customer is rejected before anything is written", asyn
   for (const as of ["ghost", "gone"]) {
     const response = await place([{ productId: A, quantity: 1 }], { as });
 
-    assert.equal(response.status, 401, as);
+    // Ended sessions are turned away by the auth middleware (see session.test.ts);
+    // a live token for a missing or deactivated account is refused by the route.
+    assert.equal(response.status, 404, as);
   }
 
   assert.equal(prisma.rows.length, 0);

@@ -126,9 +126,14 @@ interface Session {
   sid: string;
 }
 
-async function call(method: string, path: string, opts: { token?: string; body?: unknown; internal?: boolean } = {}) {
-  const headers: Record<string, string> = { "content-type": "application/json" };
+async function call(
+  method: string,
+  path: string,
+  opts: { token?: string; body?: unknown; internal?: boolean; cookie?: string } = {}
+) {
+  const headers: Record<string, string> = { "content-type": "application/json", "x-requested-with": "fetch" };
   if (opts.token) headers.authorization = `Bearer ${opts.token}`;
+  if (opts.cookie !== undefined) headers.cookie = `refresh_token=${opts.cookie}`;
   if (opts.internal) headers["x-internal-token"] = "internal-secret";
 
   const response = await fetch(`${base}${path}`, {
@@ -138,14 +143,22 @@ async function call(method: string, path: string, opts: { token?: string; body?:
   });
   const text = response.status === 204 ? "" : await response.text();
 
-  return { status: response.status, body: (text ? JSON.parse(text) : {}) as Record<string, any> };
+  const setCookie = response.headers.getSetCookie().find((line) => line.startsWith("refresh_token="));
+
+  return {
+    status: response.status,
+    body: (text ? JSON.parse(text) : {}) as Record<string, any>,
+    /** What the response put in the refresh cookie ("" = being cleared, undefined = untouched). */
+    refreshToken: setCookie ? setCookie.split(";")[0]?.slice("refresh_token=".length) : undefined,
+  };
 }
 
 async function signIn(email: string): Promise<Session> {
-  const { status, body } = await call("POST", "/auth/login", { body: { email, password: PASSWORD } });
+  const { status, body, refreshToken } = await call("POST", "/auth/login", { body: { email, password: PASSWORD } });
   assert.equal(status, 200);
+  assert.ok(refreshToken);
   const sid = (jwt.decode(body.token) as jwt.JwtPayload).sid as string;
-  return { token: body.token, refreshToken: body.refreshToken, sid };
+  return { token: body.token, refreshToken, sid };
 }
 
 const me = (session: Session) => call("GET", "/users/me", { token: session.token }).then((r) => r.status);
@@ -158,7 +171,7 @@ test("a session works until it is ended, then its access token is refused at onc
   assert.equal(await me(ada), 200);
   assert.equal(await sessionActive(ada.sid), true);
 
-  await call("POST", "/auth/logout", { body: { refreshToken: ada.refreshToken } });
+  await call("POST", "/auth/logout", { cookie: ada.refreshToken });
 
   // The JWT itself hasn't expired, but its session is over.
   assert.equal(await me(ada), 401);
@@ -170,12 +183,14 @@ test("sign out of all devices ends every session of the account, and only that a
   const phone = await signIn("ada@example.com");
   const bola = await signIn("bola@example.com");
 
-  assert.equal((await call("POST", "/users/me/logout-all", { token: laptop.token })).status, 204);
+  const out = await call("POST", "/users/me/logout-all", { token: laptop.token, cookie: laptop.refreshToken });
+  assert.equal(out.status, 204);
+  assert.equal(out.refreshToken, "", "this device's cookie is cleared too");
 
   assert.equal(await me(laptop), 401);
   assert.equal(await me(phone), 401);
   assert.equal(await me(bola), 200);
-  assert.equal((await call("POST", "/auth/refresh", { body: { refreshToken: phone.refreshToken } })).status, 401);
+  assert.equal((await call("POST", "/auth/refresh", { cookie: phone.refreshToken })).status, 401);
 });
 
 test("an admin can force a user out; customers can't", async () => {
@@ -204,13 +219,15 @@ test("changing a password signs out other devices but keeps this one", async () 
 
   const changed = await call("POST", "/users/me/password", {
     token: laptop.token,
-    body: { currentPassword: PASSWORD, newPassword: "a brand new password", refreshToken: laptop.refreshToken },
+    cookie: laptop.refreshToken,
+    body: { currentPassword: PASSWORD, newPassword: "a brand new password" },
   });
 
   assert.equal(changed.status, 204);
+  assert.equal(changed.refreshToken, undefined, "this device's cookie is left alone");
   assert.equal(await me(phone), 401);
   assert.equal(await me(laptop), 200);
-  assert.equal((await call("POST", "/auth/refresh", { body: { refreshToken: laptop.refreshToken } })).status, 200);
+  assert.equal((await call("POST", "/auth/refresh", { cookie: laptop.refreshToken })).status, 200);
 });
 
 test("deactivating an account (by itself or by an admin) ends its sessions", async () => {
@@ -218,13 +235,15 @@ test("deactivating an account (by itself or by an admin) ends its sessions", asy
   const bola = await signIn("bola@example.com");
   const root = await signIn("root@example.com");
 
-  assert.equal((await call("DELETE", "/users/me", { token: ada.token })).status, 204);
+  const gone = await call("DELETE", "/users/me", { token: ada.token, cookie: ada.refreshToken });
+  assert.equal(gone.status, 204);
+  assert.equal(gone.refreshToken, "", "the cookie is cleared");
   assert.equal(await me(ada), 401);
 
   const patched = await call("PATCH", `/users/${BOLA}`, { token: root.token, body: { isActive: false } });
   assert.equal(patched.status, 200);
   assert.equal(await me(bola), 401);
-  assert.equal((await call("POST", "/auth/refresh", { body: { refreshToken: bola.refreshToken } })).status, 401);
+  assert.equal((await call("POST", "/auth/refresh", { cookie: bola.refreshToken })).status, 401);
 });
 
 test("changing a role ends the user's sessions, so a demoted admin can't keep admin access", async () => {

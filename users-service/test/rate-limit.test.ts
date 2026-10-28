@@ -92,17 +92,36 @@ beforeEach(async () => {
   }
 });
 
+/**
+ * `{ refreshToken }` in a body is sent the way the browser does it, as the refresh cookie.
+ * The reply's `refreshToken` is whatever the response put in that cookie.
+ */
 async function post(path: string, body: unknown, ip = "10.0.0.1") {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "x-requested-with": "fetch",
+    "x-forwarded-for": ip,
+  };
+  const token = (body as { refreshToken?: unknown } | null)?.refreshToken;
+
+  if (path.startsWith("/auth/refresh") && typeof token === "string") {
+    headers.cookie = `refresh_token=${token}`;
+  }
+
   const response = await fetch(`${base}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-forwarded-for": ip },
-    body: JSON.stringify(body),
+    headers,
+    body: JSON.stringify(path.startsWith("/auth/refresh") ? {} : body),
   });
   const text = await response.text();
+  const cookie = response.headers
+    .getSetCookie()
+    .find((line) => line.startsWith("refresh_token="));
 
   return {
     status: response.status,
     retryAfter: response.headers.get("retry-after"),
+    refreshToken: cookie ? cookie.split(";")[0]?.slice("refresh_token=".length) : undefined,
     body: (text ? JSON.parse(text) : {}) as Record<string, any>,
   };
 }
@@ -295,22 +314,22 @@ test("refresh: after 30 bad tokens from one address, further refreshes are refus
   assert.ok(Number(blocked.retryAfter) >= 1);
 
   // Another address is unaffected, including with a real token.
-  const session = (await login("ada@example.com", PASSWORD, "10.6.6.6")).body.refreshToken as string;
+  const session = (await login("ada@example.com", PASSWORD, "10.6.6.6")).refreshToken as string;
   assert.equal((await post("/auth/refresh", { refreshToken: session }, "10.6.6.6")).status, 200);
 });
 
 test("refresh: normal use is never limited, however often a person refreshes", async () => {
-  let current = (await login("ada@example.com", PASSWORD)).body.refreshToken as string;
+  let current = (await login("ada@example.com", PASSWORD)).refreshToken as string;
 
   for (let i = 0; i < 40; i += 1) {
     const reply = await post("/auth/refresh", { refreshToken: current });
     assert.equal(reply.status, 200, `refresh ${i}`);
-    current = reply.body.refreshToken as string;
+    current = reply.refreshToken as string;
   }
 });
 
 test("refresh: two tabs racing (a harmless 401) don't count against the address", async () => {
-  const first = (await login("ada@example.com", PASSWORD)).body.refreshToken as string;
+  const first = (await login("ada@example.com", PASSWORD)).refreshToken as string;
 
   const [a, b] = await Promise.all([
     post("/auth/refresh", { refreshToken: first }),
@@ -326,12 +345,12 @@ test("refresh: two tabs racing (a harmless 401) don't count against the address"
 });
 
 test("refresh: the per-address request limit stops floods of real refreshes (300 per window)", async () => {
-  let current = (await login("ada@example.com", PASSWORD)).body.refreshToken as string;
+  let current = (await login("ada@example.com", PASSWORD)).refreshToken as string;
 
   for (let i = 0; i < 300; i += 1) {
     const reply = await post("/auth/refresh", { refreshToken: current });
     assert.equal(reply.status, 200, `refresh ${i}`);
-    current = reply.body.refreshToken as string;
+    current = reply.refreshToken as string;
   }
 
   assert.equal((await post("/auth/refresh", { refreshToken: current })).status, 429);

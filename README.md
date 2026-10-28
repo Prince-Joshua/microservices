@@ -37,12 +37,12 @@ by its signature.
 | Method | Path | Access | Purpose |
 |---|---|---|---|
 | POST | `/auth/register` | public | `{ name, email, password }` -> 201 customer |
-| POST | `/auth/login` | public | `{ email, password }` -> `{ token, refreshToken, user }`. `token` is a short-lived JWT (`JWT_EXPIRES_IN`, 15 minutes) |
-| POST | `/auth/refresh` | public | `{ refreshToken }` -> a new `{ token, refreshToken, user }`. Each refresh token works **once**; the old one is then dead |
-| POST | `/auth/logout` | public | `{ refreshToken }` -> 204. Ends that session; harmless with an unknown token |
+| POST | `/auth/login` | public | `{ email, password }` -> `{ token, user }` and a `refresh_token` cookie. `token` is a short-lived JWT (`JWT_EXPIRES_IN`, 15 minutes) |
+| POST | `/auth/refresh` | cookie | no body; needs the `refresh_token` cookie and an `X-Requested-With` header -> a new `{ token, user }` and a replacement cookie. Each refresh token works **once**; the old one is then dead |
+| POST | `/auth/logout` | cookie | no body; needs the cookie and `X-Requested-With` -> 204 and the cookie is cleared. Ends that session; harmless with an unknown token |
 | GET | `/users/me` | customer | own profile |
 | PATCH | `/users/me` | customer | `{ name }` |
-| POST | `/users/me/password` | customer | `{ currentPassword, newPassword, refreshToken? }` -> 204. Signs out every other session; send the current `refreshToken` to stay signed in here |
+| POST | `/users/me/password` | customer | `{ currentPassword, newPassword }` -> 204. Signs out every other session; the browser's `refresh_token` cookie keeps this one signed in |
 | DELETE | `/users/me` | customer | deactivate own account -> 204 |
 | POST | `/users/me/logout-all` | customer | sign out of every device, this one included -> 204 |
 | GET | `/users` | admin | `?page&limit&email` |
@@ -58,16 +58,31 @@ long-lived refresh token (`REFRESH_TOKEN_TTL_DAYS`, 30 by default; a session nev
 every use**. Presenting one that was already used (outside a 10-second grace window for two tabs refreshing at
 once) means it was copied, so the whole session is revoked.
 
+**The refresh cookie.** The refresh token is never in a response body: it travels as an
+`HttpOnly; SameSite=Strict` cookie, so page scripts can't read it and an XSS bug or a poisoned dependency can't
+steal it. The web app keeps the access token (and the signed-in user) in memory only, and asks `/auth/refresh`
+once on every page load. The cookie's `Path` is `/api/users` (the address the browser sees, set with
+`REFRESH_COOKIE_PATH`) and it is `Secure` in production (`REFRESH_COOKIE_SECURE=false` for plain http on anything
+but localhost). Refresh and logout also require an `X-Requested-With` header and, when `ALLOWED_ORIGINS` is set,
+an `Origin` from that list, so a cross-site request can't use the cookie. A refresh with no cookie at all (a
+visitor who isn't signed in) is a plain 401 that doesn't count toward the bad-token limit. The API must be
+same-origin with the page (the Vercel rewrites and the gateway are); a cross-origin `VITE_*_URL` would also need
+CORS with credentials.
+
 **Revoking.** Every access token carries its session id (`sid`). A session is ended by signing out, "sign out of
 all devices", an admin's force sign-out, a password change (all *other* sessions), deactivating the account, or
 changing its role. After that:
 
 - the **users service** rejects the session's access tokens on the very next request;
 - **products** and **orders** ask `GET /internal/sessions/:sid` and cache the answer for `SESSION_CACHE_MS`
-  (30 s), so a revoked token stops working there within about half a minute;
-- if the users service can't be reached (asleep on a free host, say), they **accept** the token rather than lock
-  everyone out; its 15-minute expiry still applies. Leave `USERS_SERVICE_URL` unset on a service to switch the
-  check off.
+  (30 s), so a revoked customer token stops working there within about half a minute;
+- **admin tokens are held to a stricter rule.** Their answer is trusted for only `ADMIN_SESSION_CACHE_MS`
+  (15 s), and if the users service can't be reached (or answers with an error) the token is **refused**,
+  not accepted: product changes, stock changes and order fulfilment stop until the users service is back. On
+  public product pages a token that can't be confirmed is treated as a visitor, so nothing admin-only is shown;
+- for ordinary customer tokens, if the users service can't be reached (asleep on a free host, say), the token is
+  **accepted** rather than lock every shopper out; its 15-minute expiry still applies. Leave `USERS_SERVICE_URL`
+  unset on a service to switch the check off (this also switches off the admin rule, so set it in production).
 
 Tokens issued before sessions existed carry no `sid` and simply run out.
 

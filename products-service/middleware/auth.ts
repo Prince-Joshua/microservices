@@ -25,7 +25,12 @@ async function readUser(req: Request): Promise<AuthUser | null> {
     }
 
     // Tokens issued before sessions existed carry no sid and live out their short life.
-    if (typeof payload.sid === "string" && !(await isSessionActive(payload.sid))) {
+    // Admin tokens fail closed: if the session can't be confirmed, the token
+    // is treated as no token (see services/session-check.ts).
+    if (
+      typeof payload.sid === "string" &&
+      !(await isSessionActive(payload.sid, { strict: payload.role === "admin" }))
+    ) {
       return null;
     }
 

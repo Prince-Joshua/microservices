@@ -10,6 +10,7 @@ import { ProductImage } from "../components/ProductImage";
 import { formatMoney } from "../lib/format";
 import { PENDING_ORDER_KEY } from "../lib/storage";
 import { toaster } from "../components/ui/toaster";
+import { safeCheckoutUrl } from "../lib/redirect";
 
 export function CartPage() {
   const { lines, total, checkoutKey, setQuantity, remove, clear, resetKey } = useCart();
@@ -45,7 +46,7 @@ export function CartPage() {
         return;
       }
 
-      const url = data.payment?.authorizationUrl;
+      const url = safeCheckoutUrl(data.payment?.authorizationUrl);
       if (url) {
         // Off to Paystack; it sends the customer back to /payment/callback.
         setRedirecting(true);

@@ -6,6 +6,7 @@ import { requireAuth, requireAdmin, currentUser } from "../middleware/auth.js";
 import { hashPassword, verifyPassword } from "../services/password.js";
 import { publicUser, parsePagination } from "../services/public-user.js";
 import { validPassword } from "./auth.routes.js";
+import { clearRefreshCookie, readRefreshCookie } from "../services/refresh-cookie.js";
 import { revokeAllForUser } from "../services/refresh-tokens.js";
 
 const router = Router();
@@ -62,15 +63,12 @@ router.patch("/me", async (req, res) => {
 });
 
 /**
- * POST /users/me/password  { currentPassword, newPassword, refreshToken? }
- * Signs every other session out. Send the current refreshToken to stay
- * signed in on this device.
+ * POST /users/me/password  { currentPassword, newPassword }
+ * Signs every other session out. This device stays signed in when its
+ * refresh-token cookie is sent along (the browser does that by itself).
  */
 router.post("/me/password", async (req, res) => {
-  const { currentPassword, newPassword, refreshToken } = (req.body ?? {}) as Record<
-    string,
-    unknown
-  >;
+  const { currentPassword, newPassword } = (req.body ?? {}) as Record<string, unknown>;
 
   if (typeof currentPassword !== "string" || !validPassword(newPassword)) {
     res.status(400).json({
@@ -97,7 +95,7 @@ router.post("/me/password", async (req, res) => {
 
     user.passwordHash = await hashPassword(newPassword);
     await user.save();
-    await revokeAllForUser(String(user._id), refreshToken);
+    await revokeAllForUser(String(user._id), readRefreshCookie(req));
 
     res.status(204).end();
   } catch (error) {
@@ -119,6 +117,7 @@ router.delete("/me", async (req, res) => {
       { $set: { isActive: false } }
     );
     await revokeAllForUser(currentUser(req).id);
+    clearRefreshCookie(res);
     res.status(204).end();
   } catch (error) {
     console.error("Account deactivation failed:", error);
@@ -133,6 +132,7 @@ router.delete("/me", async (req, res) => {
 router.post("/me/logout-all", async (req, res) => {
   try {
     await revokeAllForUser(currentUser(req).id);
+    clearRefreshCookie(res);
     res.status(204).end();
   } catch (error) {
     console.error("Sign-out everywhere failed:", error);

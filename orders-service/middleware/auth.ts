@@ -26,9 +26,10 @@ export async function authenticate(
       return;
     }
 
+    // Admin tokens fail closed: if the session can't be confirmed, refuse.
     if (
       typeof payload.sid === "string" &&
-      !(await isSessionActive(payload.sid))
+      !(await isSessionActive(payload.sid, { strict: payload.role === "admin" }))
     ) {
       res.status(401).json({ message: "Authentication required" });
       return;

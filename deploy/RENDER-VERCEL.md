@@ -78,3 +78,9 @@ for the databases, and it needs paid instances.
 I could not run Render, Vercel, Supabase or Docker. Run `render blueprints validate`, and expect a fix or two on the
 first deploy; the Render logs will say which. The `fromService ... PUBLIC_HOST` wiring between services is the part
 most worth watching.
+
+**Session cookie.** The refresh token is an `HttpOnly; Secure; SameSite=Strict` cookie with `Path=/api/users`, which
+works because the browser only ever talks to the Vercel domain. Set `ALLOWED_ORIGINS` on the users service to your
+Vercel URL. After the first deploy, sign in and check in the browser's dev tools (Application > Cookies) that
+`refresh_token` is set, then reload the page: you should stay signed in. If the cookie is missing, the rewrite isn't
+passing `Set-Cookie` through.

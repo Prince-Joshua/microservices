@@ -22,7 +22,7 @@ function NavItem({ to, children, end }: { to: string; children: string; end?: bo
 }
 
 export function Layout() {
-  const { user, isAdmin, logout } = useAuth();
+  const { user, isAdmin, loading, logout } = useAuth();
   const { count } = useCart();
   const navigate = useNavigate();
   const location = useLocation();
@@ -82,7 +82,7 @@ export function Layout() {
             <HStack gap="2" display={{ base: "none", md: "flex" }}>
               {cartButton}
               <ColorModeButton />
-              {user ? (
+              {loading ? null : user ? (
                 <>
                   <Link asChild fontSize="sm" color="fg.muted" maxW="40" truncate>
                     <RouterLink to="/account">{user.name}</RouterLink>
@@ -131,7 +131,7 @@ export function Layout() {
                 {navLinks}
               </Stack>
               <Separator />
-              {user ? (
+              {loading ? null : user ? (
                 <Stack gap="3">
                   <HStack justify="space-between">
                     <Link asChild fontSize="sm" color="fg.muted" truncate>

@@ -88,6 +88,7 @@ beforeEach(() => {
   clearSessionCache();
   delete process.env.SESSION_CACHE_MS;
   delete process.env.SESSION_CHECK_TIMEOUT_MS;
+  delete process.env.ADMIN_SESSION_CACHE_MS;
   useUsersService();
 });
 
@@ -204,4 +205,87 @@ test("an ended session does not turn an admin into an anonymous visitor with adm
   });
 
   assert.equal(response.status, 500);
+});
+
+test("admin actions fail closed: if the session can't be confirmed, 401", async () => {
+  mode = "error";
+  assert.equal(await createProduct(adminToken("s1")), 401);
+
+  mode = "garbage";
+  clearSessionCache();
+  assert.equal(await createProduct(adminToken("s2")), 401);
+
+  process.env.USERS_SERVICE_URL = `http://127.0.0.1:${await closedPort()}`;
+  process.env.SESSION_CHECK_TIMEOUT_MS = "500";
+  assert.equal(await createProduct(adminToken("s3")), 401);
+});
+
+test("a failed check is remembered briefly for admins too, without being treated as active", async () => {
+  mode = "error";
+
+  assert.equal(await isSessionActive("s1", { strict: true }), false);
+  assert.equal(await isSessionActive("s1", { strict: true }), false);
+  assert.equal(hits, 1, "not hammered while the users service is down");
+
+  // The same unanswered check must not let an ordinary token's guess leak into admin.
+  assert.equal(await isSessionActive("s1"), true);
+});
+
+test("customers still fail open when the users service is down", async () => {
+  mode = "error";
+
+  const customer = jwt.sign({ role: "customer", sid: "c1" }, "test-secret", {
+    subject: "u2",
+    algorithm: "HS256",
+  });
+
+  // Reaches the database (500) instead of being turned away (401).
+  const response = await fetch(`${base}/products/`, {
+    headers: { authorization: `Bearer ${customer}` },
+  });
+
+  assert.equal(response.status, 500);
+});
+
+test("when the users service is down, an admin token is treated as anonymous on public routes", async () => {
+  mode = "error";
+
+  // optionalAuth drops the admin: the request goes on as a visitor (database
+  // reached, 500 here) rather than with admin rights.
+  const response = await fetch(`${base}/products?includeInactive=true`, {
+    headers: { authorization: `Bearer ${adminToken("s1")}` },
+  });
+
+  assert.equal(response.status, 500);
+  assert.equal(await isSessionActive("s1", { strict: true }), false);
+});
+
+test("admins are re-checked sooner than customers; a revoked admin is cut off within ADMIN_SESSION_CACHE_MS", async () => {
+  process.env.ADMIN_SESSION_CACHE_MS = "10";
+  sessions.set("s1", true);
+
+  assert.equal(await isSessionActive("s1", { strict: true }), true);
+  assert.equal(await isSessionActive("s1", { strict: true }), true);
+  assert.equal(hits, 1, "inside the window the answer is reused");
+
+  sessions.set("s1", false);
+  await sleep(25);
+
+  assert.equal(await isSessionActive("s1", { strict: true }), false);
+  assert.equal(hits, 2);
+
+  // An ordinary check would still have trusted the 30 s entry.
+  sessions.set("s2", true);
+  assert.equal(await isSessionActive("s2"), true);
+  sessions.set("s2", false);
+  await sleep(25);
+  assert.equal(await isSessionActive("s2"), true, "customers keep the longer cache");
+});
+
+test("a confirmed answer is still used while the users service is down (admin)", async () => {
+  sessions.set("s1", true);
+  assert.equal(await isSessionActive("s1", { strict: true }), true);
+
+  mode = "error";
+  assert.equal(await isSessionActive("s1", { strict: true }), true, "within the admin window");
 });
