@@ -24,7 +24,7 @@ services have no free plan, so all four services are public and call each other 
 | Free services can restart at any time | An in-flight request can fail. | Idempotent steps, retries and the recovery workers handle it. |
 | Background workers only run while the service is awake | A half-finished order or an owed refund is only picked up when something wakes the service. | The customer's payment-callback page and any request wake the services; `warm-up.sh` too. |
 | Services are on public URLs | Anyone who finds a service URL can call `/internal/*`; only `INTERNAL_API_TOKEN` stops them. | The token is a generated 256-bit value. Never log or share it. The paid blueprint closes this properly. |
-| No gateway | No login rate limit, no request id stamped at the edge (each service makes its own and forwards it). | Paid blueprint restores both. |
+| No gateway | No edge rate limit and no request id stamped at the edge (each service makes its own and forwards it). The users service rate-limits login and refresh itself (see below). | Paid blueprint adds the gateway. |
 | Paystack webhook can hit a sleeping payments service | The first delivery may be slow or fail; Paystack retries undelivered webhooks later (see its docs for the schedule). | Customers are covered meanwhile by the verify call on the callback page; the worker catches the rest. |
 | Supabase free projects pause after about a week of low activity | Orders or payments start failing with connection errors until you press **Resume project** (restorable for 90 days). | Open the project or run a query weekly, or upgrade. |
 | Supabase direct connections are IPv6-only on free | Prisma times out connecting. | Use the **Session pooler** string (below). |
@@ -78,8 +78,3 @@ for the databases, and it needs paid instances.
 I could not run Render, Vercel, Supabase or Docker. Run `render blueprints validate`, and expect a fix or two on the
 first deploy; the Render logs will say which. The `fromService ... PUBLIC_HOST` wiring between services is the part
 most worth watching.
-
-**Session cookie.** The refresh token is an `HttpOnly; Secure; SameSite=Strict` cookie with `Path=/api/users`, which
-works because the browser only ever talks to the Vercel domain. After the first deploy, sign in and check in the
-browser's dev tools (Application > Cookies) that `refresh_token` is set, then reload the page: you should stay signed
-in. If the cookie is missing, the rewrite isn't passing `Set-Cookie` through.

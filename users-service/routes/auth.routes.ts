@@ -7,19 +7,12 @@ import {
 } from "../services/password.js";
 import { publicUser } from "../services/public-user.js";
 import { signAccessToken } from "../services/access-token.js";
-import { limitByIp, tooMany } from "../middleware/rate-limit.js";
 import {
-  loginByIp,
-  loginFailures,
-  refreshByIp,
-  registerByIp,
-} from "../middleware/auth-limits.js";
-import {
-  clearRefreshCookie,
-  csrfGuard,
-  readRefreshCookie,
-  setRefreshCookie,
-} from "../services/refresh-cookie.js";
+  clientIp,
+  limitByIp,
+  limits,
+  tooManyRequests,
+} from "../services/rate-limit.js";
 import {
   issueRefreshToken,
   revokeByToken,
@@ -40,7 +33,7 @@ export function validPassword(value: unknown): value is string {
  * POST /auth/register  { name, email, password }
  * Always creates a customer; admins come from `pnpm run create-admin`.
  */
-router.post("/register", limitByIp(registerByIp), async (req, res) => {
+router.post("/register", async (req, res) => {
   const { name, email, password } = (req.body ?? {}) as Record<string, unknown>;
 
   if (
@@ -78,13 +71,16 @@ router.post("/register", limitByIp(registerByIp), async (req, res) => {
 });
 
 /**
- * POST /auth/login  { email, password }  ->  { token, user }
+ * POST /auth/login  { email, password }  ->  { token, refreshToken, user }
  *
- * `token` is a short-lived JWT. The refresh token is set as an HttpOnly
- * cookie (never in the body) and is exchanged at /auth/refresh for a new
- * pair when the JWT expires.
+ * `token` is a short-lived JWT; `refreshToken` is exchanged at /auth/refresh
+ * for a new pair when it expires.
+ *
+ * Rate limited: per address, and per account (failures only), so passwords
+ * can't be guessed quickly. The 429 is the same for accounts that exist and
+ * ones that don't.
  */
-router.post("/login", limitByIp(loginByIp), async (req, res) => {
+router.post("/login", limitByIp(limits.loginPerIp, "login"), async (req, res) => {
   const { email, password } = (req.body ?? {}) as Record<string, unknown>;
 
   if (typeof email !== "string" || typeof password !== "string") {
@@ -92,14 +88,17 @@ router.post("/login", limitByIp(loginByIp), async (req, res) => {
     return;
   }
 
-  // Counted per email, not per address, so spreading guesses over many IPs
-  // doesn't help. Checked before the password is hashed, so a locked account
-  // costs no CPU.
-  const accountKey = email.trim().toLowerCase().slice(0, 254);
-  const locked = loginFailures.check(accountKey);
+  // Keys are bounded so a flood of long or random emails can't fill memory.
+  const account = email.trim().toLowerCase().slice(0, 254);
+  const accountAtIp = `${account}|${clientIp(req)}`;
 
-  if (locked.limited) {
-    tooMany(res, locked.retryAfterSec, "Too many failed sign-in attempts.");
+  // Refuse before touching the database or hashing a password.
+  const lockedHere = limits.loginFailsPerAccountIp.isBlocked(accountAtIp);
+  const lockedAnywhere = limits.loginFailsPerAccount.isBlocked(account);
+
+  if (lockedHere.blocked || lockedAnywhere.blocked) {
+    console.warn(`Login blocked after repeated failures ip=${clientIp(req)}`);
+    tooManyRequests(res, Math.max(lockedHere.retryAfterSec, lockedAnywhere.retryAfterSec));
     return;
   }
 
@@ -116,19 +115,23 @@ router.post("/login", limitByIp(loginByIp), async (req, res) => {
     // Same answer for unknown email, wrong password and deactivated
     // account, so the response doesn't reveal which accounts exist.
     if (!user || !passwordOk || !user.isActive) {
-      loginFailures.hit(accountKey);
+      limits.loginFailsPerAccountIp.hit(accountAtIp);
+      limits.loginFailsPerAccount.hit(account);
       res.status(401).json({ message: "Invalid credentials" });
       return;
     }
 
-    loginFailures.reset(accountKey);
+    // A correct password clears this address's failures. The all-addresses counter is
+    // left to expire on its own, so a guesser can't wipe it by logging in elsewhere.
+    limits.loginFailsPerAccountIp.reset(accountAtIp);
 
-    const { token: refreshToken, expiresAt } = await issueRefreshToken(String(user._id));
+    const { token: refreshToken, familyId } = await issueRefreshToken(
+      String(user._id)
+    );
 
-    setRefreshCookie(res, refreshToken, expiresAt);
-    res.set("Cache-Control", "no-store");
     res.json({
-      token: signAccessToken(user),
+      token: signAccessToken(user, familyId),
+      refreshToken,
       user: publicUser(user),
     });
   } catch (error) {
@@ -138,25 +141,40 @@ router.post("/login", limitByIp(loginByIp), async (req, res) => {
 });
 
 /**
- * POST /auth/refresh  (refresh-token cookie)  ->  { token, user }
+ * POST /auth/refresh  { refreshToken }  ->  { token, refreshToken, user }
  *
- * The refresh token is single-use: the response sets a replacement cookie,
- * and the old token stops working. The user is re-read, so a deactivation or
- * a new role takes effect here. Needs the X-Requested-With header and an allowed Origin (CSRF).
+ * The refresh token is single-use: the response carries a replacement, and
+ * the old one stops working. The user is re-read, so a deactivation or a new
+ * role takes effect here.
+ *
+ * Rate limited per address, with a tighter limit on tokens that don't work.
  */
-router.post("/refresh", limitByIp(refreshByIp), csrfGuard, async (req, res) => {
+router.post("/refresh", limitByIp(limits.refreshPerIp, "refresh"), async (req, res) => {
+  const { refreshToken } = (req.body ?? {}) as Record<string, unknown>;
   const rejected = { message: "Invalid or expired refresh token" };
+  const ip = clientIp(req);
+
+  const locked = limits.refreshFailsPerIp.isBlocked(ip);
+
+  if (locked.blocked) {
+    console.warn(`Refresh blocked after repeated failures ip=${ip}`);
+    tooManyRequests(res, locked.retryAfterSec);
+    return;
+  }
 
   try {
-    const result = await rotateRefreshToken(readRefreshCookie(req));
+    const result = await rotateRefreshToken(refreshToken);
 
     if (!result.ok) {
+      // Two tabs racing is normal; only count tokens that really are wrong or reused.
+      if (result.reason !== "concurrent") {
+        limits.refreshFailsPerIp.hit(ip);
+      }
+
       if (result.reason === "reused") {
         console.warn("Refresh token reuse detected; session revoked");
       }
 
-      // A "concurrent" loser keeps its cookie: the winner's response is about to replace it.
-      if (result.reason !== "concurrent") clearRefreshCookie(res);
       res.status(401).json(rejected);
       return;
     }
@@ -165,15 +183,13 @@ router.post("/refresh", limitByIp(refreshByIp), csrfGuard, async (req, res) => {
 
     if (!user || !user.isActive) {
       await revokeFamily(result.familyId);
-      clearRefreshCookie(res);
       res.status(401).json(rejected);
       return;
     }
 
-    setRefreshCookie(res, result.token, result.expiresAt);
-    res.set("Cache-Control", "no-store");
     res.json({
-      token: signAccessToken(user),
+      token: signAccessToken(user, result.familyId),
+      refreshToken: result.token,
       user: publicUser(user),
     });
   } catch (error) {
@@ -183,14 +199,15 @@ router.post("/refresh", limitByIp(refreshByIp), csrfGuard, async (req, res) => {
 });
 
 /**
- * POST /auth/logout  (refresh-token cookie)  ->  204
- * Revokes the whole session and clears the cookie. Always 204 for an unknown
- * token, so it can be called blindly on sign-out. Needs X-Requested-With and an allowed Origin.
+ * POST /auth/logout  { refreshToken }  ->  204
+ * Revokes the whole session. Always 204 for an unknown token, so it can be
+ * called blindly on sign-out.
  */
-router.post("/logout", csrfGuard, async (req, res) => {
+router.post("/logout", async (req, res) => {
+  const { refreshToken } = (req.body ?? {}) as Record<string, unknown>;
+
   try {
-    await revokeByToken(readRefreshCookie(req));
-    clearRefreshCookie(res);
+    await revokeByToken(refreshToken);
     res.status(204).end();
   } catch (error) {
     console.error("Logout failed:", error);

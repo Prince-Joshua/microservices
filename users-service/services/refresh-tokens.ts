@@ -40,7 +40,7 @@ export interface Session {
 export async function issueRefreshToken(
   userId: string,
   session?: Session
-): Promise<{ token: string; familyId: string; expiresAt: Date }> {
+): Promise<{ token: string; familyId: string }> {
   const now = Date.now();
   const familyId = session?.familyId ?? randomUUID();
   const sessionStartedAt = session?.sessionStartedAt ?? new Date(now);
@@ -56,13 +56,14 @@ export async function issueRefreshToken(
     sessionStartedAt,
     expiresAt,
     revokedAt: null,
+    terminated: false,
   });
 
-  return { token, familyId, expiresAt };
+  return { token, familyId };
 }
 
 export type RotateResult =
-  | { ok: true; userId: string; token: string; familyId: string; expiresAt: Date }
+  | { ok: true; userId: string; token: string; familyId: string }
   | { ok: false; reason: "invalid" | "concurrent" | "reused" };
 
 /**
@@ -86,10 +87,21 @@ export async function rotateRefreshToken(presented: unknown): Promise<RotateResu
   );
 
   if (claimed) {
+    // The session may have been ended in the instant between lookup and claim.
+    if (!(await isSessionActive(claimed.familyId))) {
+      return { ok: false, reason: "invalid" };
+    }
+
     const next = await issueRefreshToken(String(claimed.userId), {
       familyId: claimed.familyId,
       sessionStartedAt: claimed.sessionStartedAt,
     });
+
+    // ...or while the new token was being written: don't let it outlive the session.
+    if (!(await isSessionActive(claimed.familyId))) {
+      await revokeFamily(claimed.familyId);
+      return { ok: false, reason: "invalid" };
+    }
 
     return { ok: true, userId: String(claimed.userId), ...next };
   }
@@ -108,12 +120,24 @@ export async function rotateRefreshToken(presented: unknown): Promise<RotateResu
   return { ok: false, reason: "invalid" };
 }
 
-/** End one session: every token it ever issued stops working. */
+/**
+ * End one session: its refresh tokens stop working, and so do the access
+ * tokens that name it (see isSessionActive).
+ */
 export async function revokeFamily(familyId: string): Promise<void> {
   await RefreshToken.updateMany(
     { familyId, revokedAt: null },
     { $set: { revokedAt: new Date() } }
   );
+  await RefreshToken.updateMany({ familyId }, { $set: { terminated: true } });
+}
+
+/**
+ * False once the session was ended on purpose. Services call this (through
+ * /internal/sessions/:id) to reject an access token that hasn't expired yet.
+ */
+export async function isSessionActive(familyId: string): Promise<boolean> {
+  return !(await RefreshToken.findOne({ familyId, terminated: true }));
 }
 
 /** Sign-out: revoke the session a presented token belongs to. Unknown tokens are ignored. */
@@ -137,16 +161,20 @@ export async function revokeAllForUser(
   userId: string,
   keepToken?: unknown
 ): Promise<void> {
-  const filter: Record<string, unknown> = { userId, revokedAt: null };
+  const scope: Record<string, unknown> = { userId };
 
   if (plausible(keepToken)) {
     const current = await RefreshToken.findOne({ tokenHash: hashToken(keepToken) });
 
     // Only spare a session that really is this person's and still alive.
     if (current && current.userId === userId && !current.revokedAt) {
-      filter.familyId = { $ne: current.familyId };
+      scope.familyId = { $ne: current.familyId };
     }
   }
 
-  await RefreshToken.updateMany(filter, { $set: { revokedAt: new Date() } });
+  await RefreshToken.updateMany(
+    { ...scope, revokedAt: null },
+    { $set: { revokedAt: new Date() } }
+  );
+  await RefreshToken.updateMany(scope, { $set: { terminated: true } });
 }

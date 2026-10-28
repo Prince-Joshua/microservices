@@ -18,6 +18,9 @@ export function AccountPage() {
   const [newPassword, setNewPassword] = useState("");
   const [savingPassword, setSavingPassword] = useState(false);
 
+  const [confirmLogoutAll, setConfirmLogoutAll] = useState(false);
+  const [loggingOutAll, setLoggingOutAll] = useState(false);
+
   const [confirmDeactivate, setConfirmDeactivate] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
 
@@ -52,6 +55,20 @@ export function AccountPage() {
       notifyError("Couldn't change password", err);
     } finally {
       setSavingPassword(false);
+    }
+  };
+
+  const logoutEverywhere = async () => {
+    setLoggingOutAll(true);
+    try {
+      await usersApi.logoutAll();
+      logout();
+      navigate("/login");
+      notifySuccess("Signed out everywhere", "Sign in again to continue.");
+    } catch (err) {
+      notifyError("Couldn't sign out", err);
+      setLoggingOutAll(false);
+      setConfirmLogoutAll(false);
     }
   };
 
@@ -125,6 +142,21 @@ export function AccountPage() {
           </Card.Body>
         </Card.Root>
 
+        <Card.Root>
+          <Card.Header>
+            <Card.Title>Sign out of all devices</Card.Title>
+            <Card.Description>
+              Ends every session on every phone and computer, including this one. Use it if you lost a device or
+              think someone else has access to your account.
+            </Card.Description>
+          </Card.Header>
+          <Card.Footer>
+            <Button variant="outline" onClick={() => setConfirmLogoutAll(true)}>
+              Sign out everywhere
+            </Button>
+          </Card.Footer>
+        </Card.Root>
+
         <Card.Root borderColor="red.muted">
           <Card.Header>
             <Card.Title>Deactivate account</Card.Title>
@@ -147,6 +179,20 @@ export function AccountPage() {
           </Text>
         </Stack>
       </Stack>
+
+      <ConfirmDialog
+        open={confirmLogoutAll}
+        title="Sign out of all devices?"
+        confirmLabel="Sign out everywhere"
+        cancelLabel="Cancel"
+        colorPalette="brand"
+        loading={loggingOutAll}
+        onConfirm={logoutEverywhere}
+        onCancel={() => setConfirmLogoutAll(false)}
+      >
+        You'll be signed out here too and will need to sign in again. Other devices lose access within about
+        half a minute.
+      </ConfirmDialog>
 
       <ConfirmDialog
         open={confirmDeactivate}

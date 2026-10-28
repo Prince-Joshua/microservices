@@ -4,7 +4,7 @@
 #
 # Needs Docker Compose 2.24+ (uses !override). Walkthrough: deploy/SPLIT-PRODUCTS.md
 #
-#   catalog     :4011  /products*           shoppers + admins        (JWT_SECRET only)
+#   catalog     :4011  /products*           shoppers + admins        (JWT_SECRET, plus the users service to check sessions)
 #   inventory   :4012  /internal/*          stock for the saga       (INTERNAL_API_TOKEN only)
 #   reconciler  :4013  background job       repairs stuck reservations
 #   router      :4002  nginx, alias "products": sends /internal/* to inventory, the rest to catalog
@@ -33,9 +33,9 @@ services:
       PORT: 4011
       MONGO_URL: mongodb://products-mongo:27017/products
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
-      # Admin writes are checked against the Users service.
-      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
+      # Used only to ask the users service whether a session is still alive.
       USERS_SERVICE_URL: http://users:4001
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
     deploy:
       replicas: ${CATALOG_REPLICAS:-2}
     healthcheck:

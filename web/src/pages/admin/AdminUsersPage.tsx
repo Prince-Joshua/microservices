@@ -7,6 +7,7 @@ import { useAuth } from "../../context/AuthContext";
 import { PageHeader } from "../../components/PageHeader";
 import { ErrorAlert } from "../../components/ErrorAlert";
 import { Pagination } from "../../components/Pagination";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { formatDate } from "../../lib/format";
 import { notifyError, notifySuccess } from "../../components/ui/toaster";
 
@@ -18,6 +19,7 @@ export function AdminUsersPage() {
   const [input, setInput] = useState("");
   const [email, setEmail] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState<User | null>(null);
 
   const { data, error, loading, reload } = useFetch(
     (signal) => usersApi.list({ page, limit: LIMIT, email }, signal),
@@ -40,6 +42,20 @@ export function AdminUsersPage() {
       notifyError("Couldn't update user", err);
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const revokeSessions = async () => {
+    if (!revoking) return;
+    setBusyId(revoking.id);
+    try {
+      await usersApi.revokeSessions(revoking.id);
+      notifySuccess("Signed out everywhere", revoking.email);
+    } catch (err) {
+      notifyError("Couldn't revoke sessions", err);
+    } finally {
+      setBusyId(null);
+      setRevoking(null);
     }
   };
 
@@ -124,6 +140,10 @@ export function AdminUsersPage() {
                     </Table.Cell>
                     <Table.Cell>{formatDate(u.createdAt)}</Table.Cell>
                     <Table.Cell textAlign="end">
+                      <HStack justify="flex-end" gap="2">
+                      <Button size="xs" variant="ghost" disabled={self || busyId === u.id} onClick={() => setRevoking(u)}>
+                        Sign out everywhere
+                      </Button>
                       <Button
                         size="xs"
                         variant="outline"
@@ -136,6 +156,7 @@ export function AdminUsersPage() {
                       >
                         {u.isActive ? "Deactivate" : "Reactivate"}
                       </Button>
+                      </HStack>
                     </Table.Cell>
                   </Table.Row>
                 );
@@ -146,6 +167,20 @@ export function AdminUsersPage() {
       )}
 
       {data && <Pagination page={data.page} limit={data.limit} total={data.total} onChange={setPage} />}
+
+      <ConfirmDialog
+        open={revoking !== null}
+        title="Sign this user out everywhere?"
+        confirmLabel="Sign out everywhere"
+        cancelLabel="Cancel"
+        colorPalette="orange"
+        loading={busyId !== null && busyId === revoking?.id}
+        onConfirm={revokeSessions}
+        onCancel={() => setRevoking(null)}
+      >
+        {revoking?.email} will lose access on every device within about half a minute and will need to sign in
+        again. Their account stays active.
+      </ConfirmDialog>
     </>
   );
 }

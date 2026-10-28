@@ -16,6 +16,12 @@ export interface IRefreshToken {
   expiresAt: Date;
   /** Set when the token is used (rotated) or the session is revoked. */
   revokedAt: Date | null;
+  /**
+   * Set on every row of a session that was ended on purpose (sign-out, password
+   * change, deactivation, theft). Unlike revokedAt, a normal rotation never sets it,
+   * so it is what "this session is over" means for access tokens too.
+   */
+  terminated: boolean;
   createdAt: Date;
 }
 
@@ -27,6 +33,7 @@ const refreshTokenSchema = new mongoose.Schema<IRefreshToken>(
     sessionStartedAt: { type: Date, required: true },
     expiresAt: { type: Date, required: true },
     revokedAt: { type: Date, default: null },
+    terminated: { type: Boolean, default: false },
   },
   { timestamps: { createdAt: true, updatedAt: false } }
 );

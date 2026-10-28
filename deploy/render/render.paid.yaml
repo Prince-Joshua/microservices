@@ -1,16 +1,4 @@
-# PAID / PRODUCTION blueprint (upgrade path). The free-tier blueprint is ../../render.yaml.
-# To use this one, pick this file path when creating the Blueprint in Render.
-#
-# Needs paid instances: private services have no free tier and the gateway must stay awake.
-#
-#   public   shopfront-gateway  (nginx)         <- the ONLY thing on the internet
-#   private  users, products, orders, payments  (Docker, one per folder)
-#   external MongoDB Atlas (users, products) and Supabase Postgres (orders, payments)
-#
-# Guide: deploy/RENDER-VERCEL.md.  Check with:  render blueprints validate <path>
-#
-# Region cannot be changed after creation and private networking only works inside one
-# region, so every resource uses the same one. Pick the closest to your customers.
+
 
 envVarGroups:
   - name: shopfront-jwt
@@ -30,7 +18,7 @@ services:
     dockerfilePath: ./deploy/render/gateway/Dockerfile
     dockerContext: ./deploy/render/gateway
     region: frankfurt
-    plan: 0.5c-512mb          # always-on: the Paystack webhook must never hit a sleeping service
+    plan: 0.5c-512mb 
     healthCheckPath: /health
     envVars:
       - key: USERS_HOSTPORT
@@ -50,16 +38,16 @@ services:
     dockerContext: ./users-service
     region: frankfurt
     plan: 0.5c-512mb
-    numInstances: 1           # raise to 2+ once everything works; the services are replica-safe
+    numInstances: 1         
     envVars:
       - key: PORT
         value: 10000
       - key: MONGO_URL
-        sync: false           # MongoDB Atlas connection string ending in /users
+        sync: false         
       - key: JWT_EXPIRES_IN
         value: 15m
-      - key: ALLOWED_ORIGINS
-        sync: false           # the public URL of the gateway/app (refresh/logout CSRF check)
+      - key: TRUST_PROXY
+        value: 2
       - fromGroup: shopfront-jwt
       - fromGroup: shopfront-internal
 
@@ -74,18 +62,16 @@ services:
     region: frankfurt
     plan: 0.5c-512mb
     numInstances: 1
-    # Render Blueprints cannot build a URL from another service's address, so the start
-    # command does it: "orders:10000" -> "http://orders:10000".
     dockerCommand: 'sh -c "export ORDERS_SERVICE_URL=http://$ORDERS_HOSTPORT USERS_SERVICE_URL=http://$USERS_HOSTPORT; exec node dist/server.js"'
     envVars:
       - key: PORT
         value: 10000
       - key: MONGO_URL
-        sync: false           # MongoDB Atlas connection string ending in /products
-      - key: USERS_HOSTPORT
-        fromService: { type: pserv, name: users, property: hostport }
+        sync: false        
       - key: ORDERS_HOSTPORT
         fromService: { type: pserv, name: orders, property: hostport }
+      - key: USERS_HOSTPORT  
+        fromService: { type: pserv, name: users, property: hostport }
       - fromGroup: shopfront-jwt
       - fromGroup: shopfront-internal
 
@@ -96,7 +82,7 @@ services:
     dockerfilePath: ./orders-service/Dockerfile
     dockerContext: ./orders-service
     region: frankfurt
-    plan: 0.5c-512mb          # always-on: the saga recovery worker runs inside this service
+    plan: 0.5c-512mb     
     numInstances: 1
     preDeployCommand: pnpm exec prisma migrate deploy
     dockerCommand: 'sh -c "export USERS_SERVICE_URL=http://$USERS_HOSTPORT PRODUCTS_SERVICE_URL=http://$PRODUCTS_HOSTPORT PAYMENTS_SERVICE_URL=http://$PAYMENTS_HOSTPORT; exec node dist/server.js"'
@@ -104,7 +90,7 @@ services:
       - key: PORT
         value: 10000
       - key: POSTGRES_URL
-        sync: false           # Supabase SESSION POOLER string for the orders project (see the guide)
+        sync: false      
       - key: PAYMENT_CURRENCY
         value: NGN
       - key: USERS_HOSTPORT
@@ -123,7 +109,7 @@ services:
     dockerfilePath: ./payments-service/Dockerfile
     dockerContext: ./payments-service
     region: frankfurt
-    plan: 0.5c-512mb          # always-on: the payment worker (verify, notify, refund) runs here
+    plan: 0.5c-512mb      
     numInstances: 1
     preDeployCommand: pnpm exec prisma migrate deploy
     dockerCommand: 'sh -c "export ORDERS_SERVICE_URL=http://$ORDERS_HOSTPORT; exec node dist/server.js"'
@@ -131,11 +117,11 @@ services:
       - key: PORT
         value: 10000
       - key: POSTGRES_URL
-        sync: false           # Supabase SESSION POOLER string for the payments project
+        sync: false          
       - key: PAYSTACK_SECRET_KEY
-        sync: false           # sk_test_... until you go live. Only this service gets it.
+        sync: false          
       - key: PAYMENT_CALLBACK_URL
-        sync: false           # https://<your-vercel-domain>/payment/callback
+        sync: false        
       - key: ORDERS_HOSTPORT
         fromService: { type: pserv, name: orders, property: hostport }
       - fromGroup: shopfront-internal

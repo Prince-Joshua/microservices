@@ -6,10 +6,7 @@ import { requireAuth, requireAdmin, currentUser } from "../middleware/auth.js";
 import { hashPassword, verifyPassword } from "../services/password.js";
 import { publicUser, parsePagination } from "../services/public-user.js";
 import { validPassword } from "./auth.routes.js";
-import { clearRefreshCookie, readRefreshCookie } from "../services/refresh-cookie.js";
 import { revokeAllForUser } from "../services/refresh-tokens.js";
-import { tooMany } from "../middleware/rate-limit.js";
-import { passwordFailures } from "../middleware/auth-limits.js";
 
 const router = Router();
 
@@ -65,25 +62,21 @@ router.patch("/me", async (req, res) => {
 });
 
 /**
- * POST /users/me/password  { currentPassword, newPassword }
- * Signs every other session out. This device stays signed in when its
- * refresh-token cookie is sent along (the browser does that by itself).
+ * POST /users/me/password  { currentPassword, newPassword, refreshToken? }
+ * Signs every other session out. Send the current refreshToken to stay
+ * signed in on this device.
  */
 router.post("/me/password", async (req, res) => {
-  const { currentPassword, newPassword } = (req.body ?? {}) as Record<string, unknown>;
+  const { currentPassword, newPassword, refreshToken } = (req.body ?? {}) as Record<
+    string,
+    unknown
+  >;
 
   if (typeof currentPassword !== "string" || !validPassword(newPassword)) {
     res.status(400).json({
       message:
         "currentPassword and a newPassword of 8-128 characters are required",
     });
-    return;
-  }
-
-  const locked = passwordFailures.check(currentUser(req).id);
-
-  if (locked.limited) {
-    tooMany(res, locked.retryAfterSec, "Too many wrong passwords.");
     return;
   }
 
@@ -98,16 +91,13 @@ router.post("/me/password", async (req, res) => {
     }
 
     if (!(await verifyPassword(currentPassword, user.passwordHash))) {
-      passwordFailures.hit(String(user._id));
       res.status(401).json({ message: "Current password is incorrect" });
       return;
     }
 
-    passwordFailures.reset(String(user._id));
-
     user.passwordHash = await hashPassword(newPassword);
     await user.save();
-    await revokeAllForUser(String(user._id), readRefreshCookie(req));
+    await revokeAllForUser(String(user._id), refreshToken);
 
     res.status(204).end();
   } catch (error) {
@@ -119,8 +109,8 @@ router.post("/me/password", async (req, res) => {
 /**
  * DELETE /users/me
  * Deactivates the account (orders reference it, so it is never erased).
- * Existing access tokens are refused straight away: this service checks the
- * account on every request, and the other services re-check it within seconds.
+ * Existing tokens stop working for new orders immediately because the
+ * Orders service checks isActive on every order.
  */
 router.delete("/me", async (req, res) => {
   try {
@@ -129,11 +119,24 @@ router.delete("/me", async (req, res) => {
       { $set: { isActive: false } }
     );
     await revokeAllForUser(currentUser(req).id);
-    clearRefreshCookie(res);
     res.status(204).end();
   } catch (error) {
     console.error("Account deactivation failed:", error);
     res.status(500).json({ message: "Unable to deactivate account" });
+  }
+});
+
+/**
+ * POST /users/me/logout-all  ->  204
+ * Signs this account out of every device, including this one.
+ */
+router.post("/me/logout-all", async (req, res) => {
+  try {
+    await revokeAllForUser(currentUser(req).id);
+    res.status(204).end();
+  } catch (error) {
+    console.error("Sign-out everywhere failed:", error);
+    res.status(500).json({ message: "Unable to sign out" });
   }
 });
 
@@ -178,6 +181,32 @@ router.get("/:id", requireAdmin, async (req, res) => {
   } catch (error) {
     console.error("User lookup failed:", error);
     res.status(500).json({ message: "Unable to load user" });
+  }
+});
+
+/**
+ * POST /users/:id/revoke-sessions  ->  204   (admin)
+ * Signs a user out of every device, e.g. when an account may be compromised.
+ */
+router.post("/:id/revoke-sessions", requireAdmin, async (req, res) => {
+  const { id } = req.params;
+
+  if (!mongoose.isValidObjectId(id)) {
+    res.status(404).json({ message: "User not found" });
+    return;
+  }
+
+  try {
+    if (!(await User.exists({ _id: id }))) {
+      res.status(404).json({ message: "User not found" });
+      return;
+    }
+
+    await revokeAllForUser(id);
+    res.status(204).end();
+  } catch (error) {
+    console.error("Session revocation failed:", error);
+    res.status(500).json({ message: "Unable to revoke sessions" });
   }
 });
 
@@ -235,8 +264,9 @@ router.patch("/:id", requireAdmin, async (req, res) => {
       return;
     }
 
-    // A deactivated account can't refresh its way back in.
-    if (update.isActive === false) {
+    // A deactivated account can't refresh its way back in, and a changed role
+    // must not linger in tokens that are still valid.
+    if (update.isActive === false || update.role !== undefined) {
       await revokeAllForUser(String(user._id));
     }
 

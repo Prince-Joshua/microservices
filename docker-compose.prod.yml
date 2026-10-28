@@ -45,7 +45,6 @@ services:
       PORT: 4001
       MONGO_URL: mongodb://users-mongo:27017/users
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-15m}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4001/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
       interval: 10s

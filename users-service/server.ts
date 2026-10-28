@@ -13,6 +13,7 @@ import { internalAuth } from "./middleware/internal-auth.js";
 import { User } from "./models/user.model.js";
 import { RefreshToken } from "./models/refresh-token.model.js";
 import authRoutes from "./routes/auth.routes.js";
+import { trustProxySetting } from "./services/rate-limit.js";
 import usersRoutes from "./routes/users.routes.js";
 import internalRoutes from "./routes/internal.routes.js";
 
@@ -27,18 +28,7 @@ installOutboundTracing([
 
 const app = express();
 
-/**
- * How many proxies sit in front of this service. The rate limiter keys on
- * req.ip, which is only the real client when this matches your setup:
- *   0 = none (local dev), 1 = one proxy (nginx gateway),
- *   2 = Vercel rewrite + Render's edge (free plan).
- * Too low and everyone shares one address; too high and callers can fake theirs.
- */
-function trustProxySetting(): number {
-  const n = Number.parseInt(process.env.TRUST_PROXY ?? "", 10);
-  return Number.isInteger(n) && n >= 0 ? n : 1;
-}
-
+// Which address counts as the caller's (for rate limiting); see TRUST_PROXY in .env.example.
 app.set("trust proxy", trustProxySetting());
 
 app.use(requestContext());

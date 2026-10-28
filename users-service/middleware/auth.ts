@@ -1,14 +1,14 @@
 import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
-import mongoose from "mongoose";
 
-import { User } from "../models/user.model.js";
 import type { AuthUser } from "../types/express.js";
+import { isSessionActive } from "../services/refresh-tokens.js";
 
 /**
- * Verifies a Bearer JWT, then loads the account, so a deactivation or a role
- * change applies on the very next request. The token only proves who is
- * calling; `isActive` and `role` always come from the database.
+ * Verifies a Bearer JWT and sets req.user = { id, role }, and rejects the
+ * token at once if its session was ended (sign-out, password change,
+ * deactivation). A role change ends the user's sessions, so the role in the
+ * token is never stale for long.
  */
 export async function requireAuth(
   req: Request,
@@ -22,8 +22,6 @@ export async function requireAuth(
     return;
   }
 
-  let id: string;
-
   try {
     const payload = jwt.verify(token, String(process.env.JWT_SECRET), {
       algorithms: ["HS256"],
@@ -34,30 +32,26 @@ export async function requireAuth(
       return;
     }
 
-    id = String(payload.sub);
-  } catch {
-    res.status(401).json({ message: "Authentication required" });
-    return;
-  }
-
-  if (!mongoose.isValidObjectId(id)) {
-    res.status(401).json({ message: "Authentication required" });
-    return;
-  }
-
-  try {
-    const user = await User.findById(id).select("role isActive").lean();
-
-    if (!user || !user.isActive) {
+    // Tokens issued before sessions existed carry no sid and live out their short life.
+    if (typeof payload.sid === "string" && !(await isSessionActive(payload.sid))) {
       res.status(401).json({ message: "Authentication required" });
       return;
     }
 
-    req.user = { id, role: user.role === "admin" ? "admin" : "customer" };
+    req.user = {
+      id: String(payload.sub),
+      role: payload.role === "admin" ? "admin" : "customer",
+    };
+
     next();
   } catch (error) {
-    console.error("Account check failed:", error);
-    res.status(503).json({ message: "Unable to verify your account right now" });
+    if (error instanceof jwt.JsonWebTokenError) {
+      res.status(401).json({ message: "Authentication required" });
+      return;
+    }
+
+    console.error("Authentication failed:", error);
+    res.status(503).json({ message: "Unable to verify your session" });
   }
 }
 

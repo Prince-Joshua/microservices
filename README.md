@@ -37,39 +37,52 @@ by its signature.
 | Method | Path | Access | Purpose |
 |---|---|---|---|
 | POST | `/auth/register` | public | `{ name, email, password }` -> 201 customer |
-| POST | `/auth/login` | public | `{ email, password }` -> `{ token, user }` and a `refresh_token` cookie. `token` is a short-lived JWT (`JWT_EXPIRES_IN`, 15 minutes) |
-| POST | `/auth/refresh` | cookie | no body; needs the `refresh_token` cookie and an `X-Requested-With` header -> a new `{ token, user }` and a replacement cookie. Each refresh token works **once**; the old one is then dead |
-| POST | `/auth/logout` | cookie | no body; needs the cookie and `X-Requested-With` -> 204 and the cookie is cleared. Ends that session; harmless with an unknown token |
+| POST | `/auth/login` | public | `{ email, password }` -> `{ token, refreshToken, user }`. `token` is a short-lived JWT (`JWT_EXPIRES_IN`, 15 minutes) |
+| POST | `/auth/refresh` | public | `{ refreshToken }` -> a new `{ token, refreshToken, user }`. Each refresh token works **once**; the old one is then dead |
+| POST | `/auth/logout` | public | `{ refreshToken }` -> 204. Ends that session; harmless with an unknown token |
 | GET | `/users/me` | customer | own profile |
 | PATCH | `/users/me` | customer | `{ name }` |
-| POST | `/users/me/password` | customer | `{ currentPassword, newPassword }` -> 204. Signs out every other session; the browser's `refresh_token` cookie keeps this one signed in |
+| POST | `/users/me/password` | customer | `{ currentPassword, newPassword, refreshToken? }` -> 204. Signs out every other session; send the current `refreshToken` to stay signed in here |
 | DELETE | `/users/me` | customer | deactivate own account -> 204 |
+| POST | `/users/me/logout-all` | customer | sign out of every device, this one included -> 204 |
 | GET | `/users` | admin | `?page&limit&email` |
 | GET | `/users/:id` | admin | one user |
+| POST | `/users/:id/revoke-sessions` | admin | sign a user out of every device -> 204 |
 | PATCH | `/users/:id` | admin | `{ isActive?, role? }` (not on yourself) |
-| GET | `/internal/users/:id` | internal | `{ id, isActive, role, email }`; the Orders and Products services treat this, not the token, as the truth |
+| GET | `/internal/users/:id` | internal | `{ id, isActive, email }` for Orders |
+| GET | `/internal/sessions/:sid` | internal | `{ active }`: is the session named in an access token still alive? Asked by Products and Orders |
 
-**Sessions.** A login returns a short-lived access token in the body and sets a long-lived refresh token as an
-`HttpOnly; SameSite=Strict` cookie (`REFRESH_TOKEN_TTL_DAYS`, 30 by default; a session never lasts past
-`REFRESH_MAX_SESSION_DAYS`, 90). Page scripts can't read the cookie, so an XSS bug or a poisoned dependency can't
-steal it; the web app keeps the access token in memory only. The cookie's `Path` is `/api/users` (the address the
-browser sees, set with `REFRESH_COOKIE_PATH`) and it is `Secure` in production (`REFRESH_COOKIE_SECURE=false` for
-plain http on anything but localhost). Refresh and logout also require an `X-Requested-With` header, and, when `ALLOWED_ORIGINS` is set,
-an `Origin` from that list, so a cross-site request can't use the cookie. The API must be same-origin with the page (the Vercel rewrites and the gateway are);
-a cross-origin `VITE_*_URL` would also need CORS with credentials.
-Refresh tokens are random, stored only as a SHA-256 hash, and **rotated on every use**. Presenting a token
-that was already used (outside a 10-second grace window for two tabs refreshing at once) revokes the whole
-session, since that means the token was copied. Signing out, changing the password (other sessions) and
-deactivating an account revoke sessions on the server. The access token itself can't be revoked, so no
-service trusts it for `isActive` or `role`: Users reads the account on every request, and Orders and Products
-ask Users (answers cached for `USER_STATUS_TTL_MS`, 15 s by default). A deactivation or role change therefore
-takes effect within seconds, and the web app picks it up on the next focus, 5-minute sync or refused request.
-If Users can't be reached, those requests fail with 503 instead of being let through. Deploy Users first.
+**Sessions.** A login starts a *session*: a short-lived access token (`JWT_EXPIRES_IN`, 15 minutes) plus a
+long-lived refresh token (`REFRESH_TOKEN_TTL_DAYS`, 30 by default; a session never outlasts
+`REFRESH_MAX_SESSION_DAYS`, 90). Refresh tokens are random, stored only as a SHA-256 hash, and **rotated on
+every use**. Presenting one that was already used (outside a 10-second grace window for two tabs refreshing at
+once) means it was copied, so the whole session is revoked.
 
-**Rate limits** (per Users instance, in memory): login 20 requests / 15 min per IP, plus 8 failed attempts / 15 min
-per email (a lock that also covers unknown emails, so it reveals nothing); refresh 60 / 15 min per IP;
-register 10 / hour per IP; 8 wrong current passwords / 15 min per account. All return 429 with `Retry-After`;
-tune with `RATE_LIMIT_*`. Set `TRUST_PROXY` to the number of proxies in front (Render free + Vercel: 2).
+**Revoking.** Every access token carries its session id (`sid`). A session is ended by signing out, "sign out of
+all devices", an admin's force sign-out, a password change (all *other* sessions), deactivating the account, or
+changing its role. After that:
+
+- the **users service** rejects the session's access tokens on the very next request;
+- **products** and **orders** ask `GET /internal/sessions/:sid` and cache the answer for `SESSION_CACHE_MS`
+  (30 s), so a revoked token stops working there within about half a minute;
+- if the users service can't be reached (asleep on a free host, say), they **accept** the token rather than lock
+  everyone out; its 15-minute expiry still applies. Leave `USERS_SERVICE_URL` unset on a service to switch the
+  check off.
+
+Tokens issued before sessions existed carry no `sid` and simply run out.
+
+**Rate limiting.** The users service slows down password guessing, in memory and without extra dependencies.
+Per 15-minute window: 100 login attempts per address; 5 wrong passwords per account per address, and 20 per
+account from anywhere (so rotating addresses doesn't help). Past a limit the answer is `429` with a
+`Retry-After` header, and the password is not even checked. A correct password clears that address's failures.
+Unknown emails count exactly like real ones, so the `429` never reveals which accounts exist. Refresh allows 300
+per address and 30 bad or reused tokens (two tabs racing doesn't count). Every number is an environment
+variable (see `users-service/.env.example`). Limits are per instance and reset on restart; behind a gateway
+(the paid blueprint) that is the stronger defence. One thing must be right: **`TRUST_PROXY`**, the number of
+reverse proxies in front of the service, which decides whose address is "the caller". Too low and everyone shares
+the proxy's address (one person's typos would lock out the whole shop); too high and callers can forge theirs.
+It is `1` by default, and `2` in the Render blueprints (Vercel + Render's load balancer). A determined attacker
+can still lock one specific account out for a window by failing on purpose; that is the price of per-account limits.
 
 Create the first admin: set `ADMIN_EMAIL` / `ADMIN_PASSWORD` in `.env`, then
 `pnpm run create-admin`.
@@ -353,7 +366,7 @@ What the free tier means in practice:
   would be suspended after about a week.
 - **No private network and no gateway.** Free web services can't receive private traffic, so all services are public and
   call each other over public URLs. `/internal/*` is protected only by the internal token (blocked through Vercel by the
-  allow-list, not on the Render URLs themselves), and there is no login rate limit.
+  allow-list, not on the Render URLs themselves), and there is no gateway-level rate limit (the users service rate-limits login and refresh itself).
 - **Workers only run while awake.** Saga recovery, the payment worker and the stock reconciler pause while a service sleeps.
 - **Supabase pauses free projects after about a week of low activity**; resume it in the dashboard. Use the *session
   pooler* connection string (the direct one is IPv6-only on free).

@@ -66,6 +66,7 @@ mock.module(new URL("../models/refresh-token.model.js", import.meta.url).href, {
   namedExports: { RefreshToken: refreshStore.model },
 });
 
+const { resetRateLimits } = await import("../services/rate-limit.js");
 const { hashPassword, verifyPassword } = await import("../services/password.js");
 const { default: authRoutes } = await import("../routes/auth.routes.js");
 
@@ -91,6 +92,7 @@ after(() => {
 beforeEach(() => {
   users.length = 0;
   refreshStore.rows.length = 0;
+  resetRateLimits();
 });
 
 async function post(path: string, body: unknown) {
@@ -172,7 +174,6 @@ test("login: issues an HS256 JWT carrying subject and role", async () => {
   assert.equal(payload.role, "customer");
   assert.ok((payload.exp ?? 0) > (payload.iat ?? 0));
   assert.equal("passwordHash" in response.body.user, false);
-  assert.equal("refreshToken" in response.body, false);
 });
 
 test("login: wrong password, unknown email and deactivated accounts all look the same", async () => {

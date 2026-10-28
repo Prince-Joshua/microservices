@@ -1,15 +1,13 @@
 import type { User } from "../api/types";
 
+export const AUTH_KEY = "shop.auth";
 export const PENDING_ORDER_KEY = "shop.pendingOrder";
 
-for (const key of ["shop.auth", "shop.session"]) {
-  try {
-    localStorage.removeItem(key);
-  } catch {}
+export interface StoredAuth {
+  token: string;
+  refreshToken?: string;
+  user: User;
 }
-
-let accessToken: string | null = null;
-let currentUser: User | null = null;
 
 function decodePayload(token: string): { exp?: number } | null {
   try {
@@ -27,44 +25,37 @@ export function isExpired(token: string): boolean {
   return typeof exp === "number" && exp * 1000 <= Date.now();
 }
 
+export function loadAuth(): StoredAuth | null {
+  try {
+    const raw = localStorage.getItem(AUTH_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredAuth;
+
+    if (
+      !parsed?.token ||
+      !parsed.user ||
+      (isExpired(parsed.token) && !parsed.refreshToken)
+    ) {
+      localStorage.removeItem(AUTH_KEY);
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function saveAuth(auth: StoredAuth | null): void {
+  try {
+    if (auth) localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
+    else localStorage.removeItem(AUTH_KEY);
+  } catch {}
+}
+
 export function getToken(): string | null {
-  return accessToken;
+  return loadAuth()?.token ?? null;
 }
 
-export function getUser(): User | null {
-  return currentUser;
-}
-
-export function setSession(token: string, user: User): void {
-  accessToken = token;
-  currentUser = user;
-}
-
-export function setSessionUser(user: User): void {
-  if (currentUser) currentUser = user;
-}
-
-/** True while someone is signed in in this tab. */
-export function isSignedIn(): boolean {
-  return currentUser !== null;
-}
-
-export function clearSession(): void {
-  accessToken = null;
-  currentUser = null;
-}
-
-const channel =
-  typeof BroadcastChannel === "undefined"
-    ? null
-    : new BroadcastChannel("shop.session");
-
-export function announceSessionChange(): void {
-  channel?.postMessage("changed");
-}
-
-export function onSessionChange(callback: () => void): () => void {
-  if (!channel) return () => undefined;
-  channel.addEventListener("message", callback);
-  return () => channel.removeEventListener("message", callback);
+export function getRefreshToken(): string | null {
+  return loadAuth()?.refreshToken ?? null;
 }
